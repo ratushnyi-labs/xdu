@@ -4,12 +4,20 @@
 //! v0.1.0 BR set: BR-002 hardlink dedup (Unix), BR-003 mount boundary (Unix),
 //! BR-004 no symlink follow, BR-005 errors don't abort, BR-006 size mode is
 //! a display concern (handled by [`crate::format`]).
+//!
+//! Both synchronous [`scan`] and asynchronous [`scan_async`] share the private
+//! `scan_into` core. The asynchronous variant returns a [`ScanHandle`] backed
+//! by `Arc<Mutex<ScanResult>>`; the worker thread mutates the shared state
+//! incrementally so the TUI can read partial results between scanner steps
+//! (BUG-002).
 
 use crate::tree::{NodeId, NodeKind, Tree, TreeError};
 use std::collections::HashSet;
 use std::fs::Metadata;
 use std::io;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
+use std::thread::JoinHandle;
 use std::time::UNIX_EPOCH;
 
 #[derive(Clone, Debug)]
@@ -46,9 +54,57 @@ pub struct ScanResult {
     pub tree: Tree,
     pub errors: Vec<ScanError>,
     pub overflow_errors: bool,
+    /// `true` while a worker thread is still mutating this `ScanResult`.
+    /// Synchronous [`scan`] returns with `running == false`; asynchronous
+    /// [`scan_async`] starts with `running == true` and the worker flips it
+    /// to `false` as its very last act.
+    pub running: bool,
+}
+
+pub struct ScanHandle {
+    pub state: Arc<Mutex<ScanResult>>,
+    /// Kept to express ownership of the worker thread. We never `.join()`
+    /// from the TUI — the worker either runs to completion (after which the
+    /// JoinHandle simply drops) or the process exits and the OS reaps it.
+    pub join_handle: Option<JoinHandle<()>>,
 }
 
 pub fn scan(root: &Path, opts: &ScanOpts) -> Result<ScanResult, ScanError> {
+    let state = init_state(root)?;
+    scan_into(&state, root.to_path_buf(), opts.clone());
+    // Sync path: only one Arc clone exists (the local `state`). try_unwrap
+    // succeeds; if it ever didn't, that would indicate a programming error
+    // and we panic loudly rather than swallow it.
+    let mutex = match Arc::try_unwrap(state) {
+        Ok(m) => m,
+        Err(_) => panic!("scan: stray Arc reference after sync scan"),
+    };
+    let inner = match mutex.into_inner() {
+        Ok(s) => s,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    Ok(inner)
+}
+
+pub fn scan_async(root: PathBuf, opts: ScanOpts) -> Result<ScanHandle, ScanError> {
+    let state = init_state(&root)?;
+    let state_for_thread = state.clone();
+    let join_handle = std::thread::Builder::new()
+        .name("xdu-scanner".to_string())
+        .spawn(move || {
+            scan_into(&state_for_thread, root, opts);
+        })
+        .map_err(|e| ScanError {
+            path: PathBuf::from("xdu-scanner"),
+            message: format!("spawn failed: {e}"),
+        })?;
+    Ok(ScanHandle {
+        state,
+        join_handle: Some(join_handle),
+    })
+}
+
+fn init_state(root: &Path) -> Result<Arc<Mutex<ScanResult>>, ScanError> {
     if root.as_os_str().to_string_lossy().contains('\0') {
         return Err(err(root, "path contains NUL byte"));
     }
@@ -56,50 +112,73 @@ pub fn scan(root: &Path, opts: &ScanOpts) -> Result<ScanResult, ScanError> {
     if !root_meta.is_dir() {
         return Err(err(root, "not a directory"));
     }
-
-    let root_dev = dev_of(&root_meta);
     let root_name = root
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_else(|| root.to_string_lossy().into_owned());
+    let tree = Tree::new(NodeKind::Dir, root_name);
+    Ok(Arc::new(Mutex::new(ScanResult {
+        tree,
+        errors: Vec::new(),
+        overflow_errors: false,
+        running: true,
+    })))
+}
 
-    let mut tree = Tree::new(NodeKind::Dir, root_name);
-    let mut errors: Vec<ScanError> = Vec::new();
-    let mut overflow_errors = false;
+enum Frame {
+    Pre(NodeId, PathBuf),
+    Post(NodeId),
+}
+
+fn scan_into(state: &Mutex<ScanResult>, root: PathBuf, opts: ScanOpts) {
+    let root_meta = match std::fs::metadata(&root) {
+        Ok(m) => m,
+        Err(_) => {
+            state.lock().unwrap().running = false;
+            return;
+        }
+    };
+    let root_dev = dev_of(&root_meta);
+    let root_id = {
+        let mut g = state.lock().unwrap();
+        let id = g.tree.root();
+        g.tree.set_accessed(id, accessed_unix_secs(&root_meta));
+        id
+    };
+
     let mut hardlinks: HashSet<(u64, u64)> = HashSet::new();
-    let mut stack: Vec<(NodeId, PathBuf)> = vec![(tree.root(), root.to_path_buf())];
+    let mut stack: Vec<Frame> = vec![Frame::Pre(root_id, root)];
 
-    while let Some((parent_id, parent_path)) = stack.pop() {
-        if !walk_one(
-            &mut tree,
-            &mut errors,
-            &mut overflow_errors,
-            &mut hardlinks,
-            &mut stack,
-            parent_id,
-            &parent_path,
-            root_dev,
-            opts,
-        ) {
-            break;
+    while let Some(frame) = stack.pop() {
+        match frame {
+            Frame::Post(id) => {
+                state.lock().unwrap().tree.set_finalized(id, true);
+            }
+            Frame::Pre(parent_id, parent_path) => {
+                stack.push(Frame::Post(parent_id));
+                if !walk_one(
+                    state,
+                    &mut hardlinks,
+                    &mut stack,
+                    parent_id,
+                    &parent_path,
+                    root_dev,
+                    &opts,
+                ) {
+                    break;
+                }
+            }
         }
     }
 
-    tree.aggregate();
-    Ok(ScanResult {
-        tree,
-        errors,
-        overflow_errors,
-    })
+    state.lock().unwrap().running = false;
 }
 
 #[allow(clippy::too_many_arguments)]
 fn walk_one(
-    tree: &mut Tree,
-    errors: &mut Vec<ScanError>,
-    overflow_errors: &mut bool,
+    state: &Mutex<ScanResult>,
     hardlinks: &mut HashSet<(u64, u64)>,
-    stack: &mut Vec<(NodeId, PathBuf)>,
+    stack: &mut Vec<Frame>,
     parent_id: NodeId,
     parent_path: &Path,
     root_dev: u64,
@@ -108,8 +187,16 @@ fn walk_one(
     let entries = match std::fs::read_dir(parent_path) {
         Ok(e) => e,
         Err(e) => {
-            push_err(errors, overflow_errors, opts.max_errors, parent_path, &e);
-            tree.mark_error(parent_id);
+            let mut guard = state.lock().unwrap();
+            let s: &mut ScanResult = &mut guard;
+            push_err(
+                &mut s.errors,
+                &mut s.overflow_errors,
+                opts.max_errors,
+                parent_path,
+                &e,
+            );
+            s.tree.mark_error(parent_id);
             return true;
         }
     };
@@ -117,8 +204,16 @@ fn walk_one(
         let entry = match entry {
             Ok(e) => e,
             Err(e) => {
-                push_err(errors, overflow_errors, opts.max_errors, parent_path, &e);
-                tree.mark_error(parent_id);
+                let mut guard = state.lock().unwrap();
+                let s: &mut ScanResult = &mut guard;
+                push_err(
+                    &mut s.errors,
+                    &mut s.overflow_errors,
+                    opts.max_errors,
+                    parent_path,
+                    &e,
+                );
+                s.tree.mark_error(parent_id);
                 continue;
             }
         };
@@ -126,8 +221,16 @@ fn walk_one(
         let meta = match entry.metadata() {
             Ok(m) => m,
             Err(e) => {
-                push_err(errors, overflow_errors, opts.max_errors, &entry_path, &e);
-                tree.mark_error(parent_id);
+                let mut guard = state.lock().unwrap();
+                let s: &mut ScanResult = &mut guard;
+                push_err(
+                    &mut s.errors,
+                    &mut s.overflow_errors,
+                    opts.max_errors,
+                    &entry_path,
+                    &e,
+                );
+                s.tree.mark_error(parent_id);
                 continue;
             }
         };
@@ -138,16 +241,19 @@ fn walk_one(
         let name = entry.file_name().to_string_lossy().into_owned();
         let (size, alloc) = compute_sizes(&meta, kind, hardlinks);
         let accessed_secs = accessed_unix_secs(&meta);
-        match tree.add_child(parent_id, kind, name, size, alloc) {
+        let mut g = state.lock().unwrap();
+        match g.tree.add_child(parent_id, kind, name, size, alloc) {
             Ok(id) => {
-                tree.set_accessed(id, accessed_secs);
+                g.tree.set_accessed(id, accessed_secs);
+                g.tree.bubble_up_add(id, size, alloc, 1);
                 if matches!(kind, NodeKind::Dir) {
-                    stack.push((id, entry_path));
+                    drop(g);
+                    stack.push(Frame::Pre(id, entry_path));
                 }
             }
             Err(TreeError::OutOfCapacity) => return false,
             Err(TreeError::InvalidParent) => {
-                tree.mark_error(parent_id);
+                g.tree.mark_error(parent_id);
             }
         }
     }
@@ -179,14 +285,6 @@ fn push_err(errors: &mut Vec<ScanError>, overflow: &mut bool, max: usize, p: &Pa
     }
 }
 
-fn accessed_unix_secs(meta: &Metadata) -> u64 {
-    meta.accessed()
-        .ok()
-        .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
-        .map(|d| d.as_secs())
-        .unwrap_or(0)
-}
-
 fn classify(meta: &Metadata) -> NodeKind {
     let ft = meta.file_type();
     if ft.is_dir() {
@@ -198,6 +296,14 @@ fn classify(meta: &Metadata) -> NodeKind {
     } else {
         NodeKind::Other
     }
+}
+
+fn accessed_unix_secs(meta: &Metadata) -> u64 {
+    meta.accessed()
+        .ok()
+        .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
 }
 
 #[cfg(unix)]
@@ -217,6 +323,12 @@ fn compute_sizes(
     kind: NodeKind,
     hardlinks: &mut HashSet<(u64, u64)>,
 ) -> (u64, u64) {
+    // Directory entries carry their own listing size (typically one block on
+    // ext-family filesystems). Per ncdu convention we count only the sum of
+    // children for dirs — return (0, 0) so eager bubble-up doesn't double-add.
+    if matches!(kind, NodeKind::Dir) {
+        return (0, 0);
+    }
     use std::os::unix::fs::MetadataExt;
     let size = meta.len();
     let alloc = meta.blocks().saturating_mul(512);
@@ -232,9 +344,12 @@ fn compute_sizes(
 #[cfg(not(unix))]
 fn compute_sizes(
     meta: &Metadata,
-    _kind: NodeKind,
+    kind: NodeKind,
     _hardlinks: &mut HashSet<(u64, u64)>,
 ) -> (u64, u64) {
+    if matches!(kind, NodeKind::Dir) {
+        return (0, 0);
+    }
     let size = meta.len();
     (size, size)
 }
@@ -341,6 +456,30 @@ mod tests {
         assert_eq!(root.size, 3);
     }
 
+    #[test]
+    fn after_scan_running_is_false_and_root_finalized() {
+        let td = TempDir::new();
+        write_file(&td.path.join("x"), b"abc");
+        let r = scan(&td.path, &ScanOpts::default()).unwrap();
+        assert!(!r.running, "sync scan must return with running=false");
+        assert!(r.tree.get(r.tree.root()).unwrap().finalized);
+    }
+
+    #[test]
+    fn scan_async_eventually_finalizes() {
+        let td = TempDir::new();
+        write_file(&td.path.join("a"), b"ab");
+        write_file(&td.path.join("b"), b"cdef");
+        let handle = scan_async(td.path.clone(), ScanOpts::default()).unwrap();
+        // Wait briefly for the worker.
+        let join = handle.join_handle.expect("worker spawned");
+        join.join().expect("worker thread completed");
+        let g = handle.state.lock().unwrap();
+        assert!(!g.running);
+        assert_eq!(g.tree.get(g.tree.root()).unwrap().size, 6);
+        assert!(g.tree.get(g.tree.root()).unwrap().finalized);
+    }
+
     #[cfg(unix)]
     #[test]
     fn permission_denied_subdir_is_recorded_not_fatal() {
@@ -354,8 +493,6 @@ mod tests {
         p.set_mode(0o000);
         fs::set_permissions(&blocked, p).unwrap();
 
-        // Root or filesystems that ignore POSIX perms bypass chmod 000.
-        // In that case the test premise does not hold; skip rather than fail.
         if std::fs::read_dir(&blocked).is_ok() {
             eprintln!("[skip] running as root or fs ignores perms");
             return;
@@ -379,7 +516,6 @@ mod tests {
         let link = td.path.join("link-to-real");
         fs::symlink(&target, &link).unwrap();
         let r = scan(&td.path, &ScanOpts::default()).unwrap();
-        // Walk children: 'real' + 'link-to-real'; link is symlink kind, not descended.
         let root_id = r.tree.root();
         let mut saw_link = false;
         for cid in r.tree.children(root_id) {
@@ -403,17 +539,14 @@ mod tests {
         let b = td.path.join("b");
         std::fs::hard_link(&a, &b).unwrap();
         let am = std::fs::metadata(&a).unwrap();
-        // Sanity: nlink >= 2.
         assert!(am.nlink() >= 2);
         let r = scan(&td.path, &ScanOpts::default()).unwrap();
-        // The first encountered file gets full alloc; the other gets 0 alloc.
         let mut allocs: Vec<u64> = r
             .tree
             .children(r.tree.root())
             .map(|id| r.tree.get(id).unwrap().alloc)
             .collect();
         allocs.sort_unstable();
-        // Order of `read_dir` not guaranteed; we expect [0, X] with X > 0.
         assert_eq!(allocs.len(), 2);
         assert_eq!(allocs[0], 0);
         assert!(allocs[1] > 0);
@@ -421,9 +554,6 @@ mod tests {
 
     #[test]
     fn sec_uc001_max_errors_cap_does_not_grow_unbounded() {
-        // A directory we can't read repeatedly inside the scan would only push
-        // a small number of errors; instead we directly construct a scenario
-        // where the cap is tested via API-level `push_err` semantics.
         let td = TempDir::new();
         let opts = ScanOpts {
             max_errors: 0,
@@ -431,13 +561,7 @@ mod tests {
         };
         write_file(&td.path.join("a"), b"x");
         let r = scan(&td.path, &opts).unwrap();
-        // No errors generated for a happy scan: overflow_errors stays false.
         assert!(!r.overflow_errors);
         assert!(r.errors.is_empty());
     }
-
-    // Note: SEC-2 (no subprocess) and SEC-3 (no unsafe) are static review gates,
-    // verified by `grep -nE 'Command::new|unsafe ' src/scanner.rs` in CI rather
-    // than at runtime — a runtime test that scans its own source becomes
-    // self-referential and the assertion strings trip it. Recorded in Speck.
 }

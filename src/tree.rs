@@ -35,6 +35,11 @@ pub struct Node {
     /// expose access time). Aggregation does not propagate this — it is a
     /// per-entry attribute, displayed only on rows.
     pub accessed_unix: u64,
+    /// `true` when the node's `size` / `alloc` / `entries` are final.
+    /// Files / symlinks / other are finalized at insert. Directories are
+    /// finalized only after the scanner has fully processed their subtree
+    /// (BUG-002). The TUI renders `???` for `!finalized` rows.
+    pub finalized: bool,
     pub parent: Option<NodeId>,
     pub first_child: Option<NodeId>,
     pub next_sibling: Option<NodeId>,
@@ -66,6 +71,7 @@ pub enum TreeError {
 
 impl Tree {
     pub fn new(root_kind: NodeKind, root_name: impl Into<Box<str>>) -> Self {
+        let finalized = !matches!(root_kind, NodeKind::Dir);
         let nodes = vec![Node {
             kind: root_kind,
             name: root_name.into(),
@@ -74,6 +80,7 @@ impl Tree {
             entries: 1,
             error: false,
             accessed_unix: 0,
+            finalized,
             parent: None,
             first_child: None,
             next_sibling: None,
@@ -127,6 +134,7 @@ impl Tree {
         }
         let id = NodeId(self.nodes.len() as u32);
         let prev_first = self.nodes[parent.index()].first_child;
+        let finalized = !matches!(kind, NodeKind::Dir);
         self.nodes.push(Node {
             kind,
             name: name.into(),
@@ -135,6 +143,7 @@ impl Tree {
             entries: 1,
             error: false,
             accessed_unix: 0,
+            finalized,
             parent: Some(parent),
             first_child: None,
             next_sibling: prev_first,
@@ -154,6 +163,37 @@ impl Tree {
     pub fn set_accessed(&mut self, id: NodeId, secs: u64) {
         if let Some(n) = self.nodes.get_mut(id.index()) {
             n.accessed_unix = secs;
+        }
+    }
+
+    /// Mark a node finalized (or not). Called by the scanner after a directory's
+    /// subtree has been fully processed (BUG-002). The TUI uses this flag to
+    /// decide whether to render the size column or `???`.
+    pub fn set_finalized(&mut self, id: NodeId, val: bool) {
+        if let Some(n) = self.nodes.get_mut(id.index()) {
+            n.finalized = val;
+        }
+    }
+
+    /// Walk the parent chain from `from` (excluding `from` itself) and
+    /// saturating-add `(size, alloc, entries)` to every ancestor. Used by the
+    /// async scanner for eager aggregation so partial sums are visible mid-scan.
+    pub fn bubble_up_add(&mut self, from: NodeId, size: u64, alloc: u64, entries: u64) {
+        let Some(start) = self.nodes.get(from.index()) else {
+            return;
+        };
+        let mut p = start.parent;
+        while let Some(parent) = p {
+            let Some(n) = self.nodes.get_mut(parent.index()) else {
+                break;
+            };
+            n.size = n.size.saturating_add(size);
+            n.alloc = n.alloc.saturating_add(alloc);
+            n.entries = n.entries.saturating_add(entries);
+            if n.size == u64::MAX || n.alloc == u64::MAX || n.entries == u64::MAX {
+                self.size_overflow = true;
+            }
+            p = n.parent;
         }
     }
 

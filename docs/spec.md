@@ -119,9 +119,12 @@ sequenceDiagram
 
 **Summary:** scan a user-specified directory and build the in-memory size tree.
 
-**Description:** the user runs `xdu <path> [flags]`. The tool initializes the TUI,
-spawns the scan, shows live progress, and transitions to the interactive view on
-completion.
+**Description:** the user runs `xdu <path> [flags]`. The tool initializes the TUI
+**immediately**, spawns the scan on a worker thread, and updates the view in place as
+the scan progresses. Per BUG-002 the scan is asynchronous: the user can navigate the
+already-discovered portion of the tree while the scanner continues populating the rest.
+Cells whose value is not yet finalized (notably directory totals mid-walk) render an
+animated spinner; as each subtree completes, its row updates on the next redraw.
 
 **Related BR/WF:** BR-002, BR-003, BR-004, BR-005, BR-006, WF-001.
 
@@ -170,9 +173,11 @@ flowchart TD
 
 **Summary:** move the selection through the directory tree using the keyboard.
 
-**Description:** after a scan completes, the user navigates with arrow keys (Up/Down to
-move within a directory, Right/Enter to descend, Left/Backspace to ascend). vi-style
-`hjkl` MUST also work. Navigation is read-only.
+**Description:** the user navigates with arrow keys (Up/Down to move within a
+directory, Right/Enter to descend, Left/Backspace to ascend). vi-style `hjkl` MUST
+also work. Navigation is read-only **and works during an in-progress scan** —
+keystrokes never block waiting for the scanner (BUG-002). Cells whose value is not
+yet finalized render an animated spinner (a cycle of `| / - \` glyphs).
 
 When the user ascends from the scan root with an empty back-stack, `xdu` triggers a
 synchronous scan of the filesystem parent directory and resets navigation to the

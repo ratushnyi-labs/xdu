@@ -1,11 +1,16 @@
 //! Terminal UI: runtime, tree-view widget, header / footer / help / errors
 //! overlays, and rescan flow. Combines TASK-001-H/I/J/K leaves into one
 //! module to keep cross-references compact.
+//!
+//! Async (BUG-002): the TUI holds an `Arc<Mutex<ScanResult>>` shared with a
+//! background scanner thread. Every render and every key handler that
+//! touches the tree locks the mutex briefly. Cells whose value is not yet
+//! finalized render an animated spinner.
 
 use crate::export;
 use crate::format::{bar, format_size, format_ymd, SizeMode};
-use crate::scanner::{scan, ScanOpts, ScanResult};
-use crate::tree::{NodeId, NodeKind, SortKey};
+use crate::scanner::{scan_async, ScanError, ScanHandle, ScanOpts, ScanResult};
+use crate::tree::{Node, NodeId, NodeKind, SortKey};
 use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 use crossterm::execute;
 use crossterm::terminal::{
@@ -20,12 +25,17 @@ use ratatui::Frame;
 use ratatui::Terminal;
 use std::io::{self, stdout, Stdout};
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, MutexGuard};
+use std::thread::JoinHandle;
 use std::time::Duration;
 
 pub struct App {
+    state: Arc<Mutex<ScanResult>>,
+    /// Kept to express ownership of the worker. Not joined; the worker either
+    /// finishes on its own or the process exits.
+    _scan_thread: Option<JoinHandle<()>>,
     root_path: PathBuf,
     opts: ScanOpts,
-    scan: ScanResult,
     current: NodeId,
     selection: usize,
     back_stack: Vec<(NodeId, usize)>,
@@ -41,14 +51,16 @@ impl App {
     pub fn new(
         root_path: PathBuf,
         opts: ScanOpts,
-        scan_result: ScanResult,
+        handle: ScanHandle,
         size_mode: SizeMode,
     ) -> Self {
+        let current = handle.state.lock().unwrap().tree.root();
         let mut s = Self {
-            current: scan_result.tree.root(),
-            scan: scan_result,
+            state: handle.state,
+            _scan_thread: handle.join_handle,
             root_path,
             opts,
+            current,
             selection: 0,
             back_stack: Vec::new(),
             sort: SortKey::SizeDesc,
@@ -58,13 +70,22 @@ impl App {
             status: None,
             quit: false,
         };
-        let cur = s.current;
-        s.scan.tree.sort(cur, s.sort);
+        s.sort_current();
         s
     }
 
+    fn lock(&self) -> MutexGuard<'_, ScanResult> {
+        self.state.lock().unwrap()
+    }
+
+    fn sort_current(&mut self) {
+        let cur = self.current;
+        let key = self.sort;
+        self.lock().tree.sort(cur, key);
+    }
+
     fn children_count(&self) -> usize {
-        self.scan.tree.children(self.current).count()
+        self.lock().tree.children(self.current).count()
     }
 
     fn can_ascend(&self) -> bool {
@@ -107,16 +128,18 @@ impl App {
             self.ascend();
             return;
         }
-        let kids: Vec<NodeId> = self.scan.tree.children(self.current).collect();
-        let Some(&target) = kids.get(self.selection - offset) else {
-            return;
+        let target = {
+            let g = self.lock();
+            let kids: Vec<NodeId> = g.tree.children(self.current).collect();
+            kids.get(self.selection - offset).copied()
         };
-        let kind = self.scan.tree.get(target).map(|n| n.kind);
+        let Some(target) = target else { return };
+        let kind = self.lock().tree.get(target).map(|n| n.kind);
         if matches!(kind, Some(NodeKind::Dir)) {
             self.back_stack.push((self.current, self.selection));
             self.current = target;
             self.selection = 0;
-            self.scan.tree.sort(self.current, self.sort);
+            self.sort_current();
         }
     }
 
@@ -140,18 +163,29 @@ impl App {
             self.status = Some("at filesystem root — cannot go up".into());
             return;
         }
-        match scan(&parent, &self.opts) {
-            Ok(r) => {
-                self.root_path = parent;
-                self.scan = r;
-                self.current = self.scan.tree.root();
+        self.start_new_scan(parent, "scanned parent directory");
+    }
+
+    fn start_new_scan(&mut self, path: PathBuf, ok_msg: &str) {
+        match scan_async(path.clone(), self.opts.clone()) {
+            Ok(handle) => {
+                self.state = handle.state;
+                self._scan_thread = handle.join_handle;
+                self.root_path = path;
+                let new_root = self.lock().tree.root();
+                self.current = new_root;
                 self.selection = 0;
                 self.back_stack.clear();
-                let cur = self.current;
-                self.scan.tree.sort(cur, self.sort);
-                self.status = Some("scanned parent directory".into());
+                self.sort_current();
+                self.status = Some(ok_msg.to_string());
             }
-            Err(e) => self.status = Some(format!("cannot scan parent: {e}")),
+            Err(e) => {
+                self.status = Some(format!("scan failed: {e}"));
+                self.lock().errors.push(ScanError {
+                    path: PathBuf::new(),
+                    message: format!("{e}"),
+                });
+            }
         }
     }
 
@@ -164,7 +198,7 @@ impl App {
             SortKey::NameDesc => SortKey::CountAsc,
             SortKey::CountAsc => SortKey::SizeDesc,
         };
-        self.scan.tree.sort(self.current, self.sort);
+        self.sort_current();
         self.selection = 0;
     }
 
@@ -176,29 +210,20 @@ impl App {
     }
 
     fn rescan(&mut self) {
-        match scan(&self.root_path, &self.opts) {
-            Ok(r) => {
-                self.scan = r;
-                self.current = self.scan.tree.root();
-                self.selection = 0;
-                self.back_stack.clear();
-                let cur = self.current;
-                self.scan.tree.sort(cur, self.sort);
-                self.status = Some("rescan complete".to_string());
-            }
-            Err(e) => {
-                self.status = Some(format!("rescan failed: {e}"));
-                self.scan.errors.push(e);
-            }
-        }
+        let path = self.root_path.clone();
+        self.start_new_scan(path, "rescan started");
     }
 
     fn export(&mut self) {
         let path: PathBuf = "xdu-export.json".into();
-        match export::write_to_path(&self.scan.tree, self.current, &self.opts, &path) {
-            Ok(_) => self.status = Some(format!("exported to {}", path.display())),
-            Err(e) => self.status = Some(format!("export failed: {e}")),
-        }
+        let result = {
+            let g = self.lock();
+            export::write_to_path(&g.tree, self.current, &self.opts, &path)
+        };
+        self.status = Some(match result {
+            Ok(_) => format!("exported to {}", path.display()),
+            Err(e) => format!("export failed: {e}"),
+        });
     }
 
     fn handle_key(&mut self, key: KeyCode, mods: KeyModifiers) {
@@ -237,11 +262,11 @@ impl App {
 pub fn run(
     root_path: PathBuf,
     opts: ScanOpts,
-    scan_result: ScanResult,
+    handle: ScanHandle,
     size_mode: SizeMode,
 ) -> io::Result<()> {
     let mut term = init_terminal()?;
-    let result = run_loop(&mut term, App::new(root_path, opts, scan_result, size_mode));
+    let result = run_loop(&mut term, App::new(root_path, opts, handle, size_mode));
     teardown_terminal();
     result
 }
@@ -285,9 +310,13 @@ fn render(f: &mut Frame, app: &App) {
         Constraint::Length(1),
     ])
     .split(area);
-    render_header(f, chunks[0], app);
-    render_body(f, chunks[1], app);
-    render_footer(f, chunks[2], app);
+
+    let g = app.state.lock().unwrap();
+    render_header(f, chunks[0], app, &g);
+    render_body(f, chunks[1], app, &g);
+    render_footer(f, chunks[2], app, &g);
+    drop(g);
+
     if app.show_help {
         render_help(f, area);
     }
@@ -296,22 +325,23 @@ fn render(f: &mut Frame, app: &App) {
     }
 }
 
-fn render_header(f: &mut Frame, area: Rect, app: &App) {
-    let path = app.scan.tree.path(app.current).join("/");
+fn render_header(f: &mut Frame, area: Rect, app: &App, state: &ScanResult) {
+    let path = state.tree.path(app.current).join("/");
     let text = format!(" {path} ");
     let s = truncate_left(&text, area.width as usize);
     let style = Style::default().add_modifier(Modifier::REVERSED);
     f.render_widget(Paragraph::new(s).style(style), area);
 }
 
-fn render_body(f: &mut Frame, area: Rect, app: &App) {
-    let tree = &app.scan.tree;
+fn render_body(f: &mut Frame, area: Rect, app: &App, state: &ScanResult) {
+    let tree = &state.tree;
     let kids: Vec<NodeId> = tree.children(app.current).collect();
     let cur = match tree.get(app.current) {
         Some(n) => n,
         None => return,
     };
     let dir_total = cur.size.max(1);
+    let dir_finalized = cur.finalized;
     let utf8 = is_utf8_terminal();
     let dotdot = app.dotdot_offset() == 1;
     let height = area.height as usize;
@@ -323,6 +353,7 @@ fn render_body(f: &mut Frame, area: Rect, app: &App) {
     };
     let end = (start + height).min(total);
     let name_w = name_column_width(area.width as usize);
+    let spinner = spinner_char();
 
     let mut lines: Vec<Line> = Vec::with_capacity(end.saturating_sub(start));
     for absolute_i in start..end {
@@ -337,9 +368,11 @@ fn render_body(f: &mut Frame, area: Rect, app: &App) {
             render_entry_row(
                 node,
                 dir_total,
+                dir_finalized,
                 name_w,
                 utf8,
                 app.size_mode,
+                spinner,
                 absolute_i == app.selection,
             )
         };
@@ -354,28 +387,43 @@ const DATE_W: usize = 10;
 const SEP_W: usize = 2;
 
 fn name_column_width(area_w: usize) -> usize {
-    // bar + 2sp + size + 2sp + date == 35 cells plus 2sp before bar
     let fixed = BAR_W + SEP_W + SIZE_W + SEP_W + DATE_W + SEP_W;
     area_w.saturating_sub(fixed).max(8)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn render_entry_row(
-    node: &crate::tree::Node,
+    node: &Node,
     dir_total: u64,
+    dir_finalized: bool,
     name_w: usize,
     utf8: bool,
     size_mode: SizeMode,
+    spinner: char,
     selected: bool,
 ) -> Line<'static> {
-    let frac = (node.size as f64) / (dir_total as f64);
     let name = display_name(&node.name, node.kind);
     let name_padded = pad_or_truncate(&name, name_w);
-    let s = format!(
-        "{name_padded}  {bar}  {size:>SIZE_W$}  {date}",
-        bar = bar(frac, BAR_W, utf8),
-        size = format_size(node.size, size_mode),
-        date = format_ymd(node.accessed_unix),
-    );
+    let (bar_str, size_str) = if node.finalized {
+        let frac = (node.size as f64) / (dir_total as f64);
+        (
+            bar(frac, BAR_W, utf8),
+            format!("{:>SIZE_W$}", format_size(node.size, size_mode)),
+        )
+    } else {
+        // Not yet calculated: blank bar + spinner-as-size (BUG-002).
+        (
+            " ".repeat(BAR_W),
+            format!("{:>SIZE_W$}", spinner.to_string()),
+        )
+    };
+    let date = format_ymd(node.accessed_unix);
+    let s = format!("{name_padded}  {bar_str}  {size_str}  {date}");
+    let frac = if dir_finalized && node.finalized {
+        (node.size as f64) / (dir_total as f64)
+    } else {
+        0.0
+    };
     let style = row_style(frac, node.kind, node.error, selected);
     Line::from(Span::styled(s, style))
 }
@@ -417,14 +465,21 @@ fn pad_or_truncate(s: &str, width: usize) -> String {
     out
 }
 
-fn render_footer(f: &mut Frame, area: Rect, app: &App) {
+fn render_footer(f: &mut Frame, area: Rect, app: &App, state: &ScanResult) {
     let s = if let Some(msg) = app.status.as_deref() {
         format!(" {msg}  (any key to dismiss) ")
+    } else if state.running {
+        format!(
+            " scanning ({} entries, {} errors) {}  q:quit ",
+            state.tree.len(),
+            state.errors.len(),
+            spinner_char()
+        )
     } else {
         format!(
             " sort:{}  errors:{}  ?:help  s:sort  u:unit  r:rescan  e:export  !:errors  q:quit ",
             sort_label(app.sort),
-            app.scan.errors.len()
+            state.errors.len()
         )
     };
     let s = truncate_left(&s, area.width as usize);
@@ -445,28 +500,30 @@ fn render_help(f: &mut Frame, area: Rect) {
         Line::from("  Home / End      jump"),
         Line::from("  s               cycle sort"),
         Line::from("  u               toggle KiB / KB units"),
-        Line::from("  r               rescan from root (synchronous)"),
+        Line::from("  r               rescan from root (async)"),
         Line::from("  e               export current subtree to xdu-export.json"),
         Line::from("  !               show errors"),
         Line::from("  ? / F1          this help"),
         Line::from("  q / Ctrl-C      quit"),
         Line::from(""),
         Line::from("xdu is read-only; no file is ever modified or deleted."),
+        Line::from("Cells with a spinner are not yet calculated; they update live."),
         Line::from(""),
         Line::from("Press any key to dismiss."),
     ];
     let block = Block::default().borders(Borders::ALL).title(" Help ");
-    let r = centered_rect(area, 60, 22);
+    let r = centered_rect(area, 64, 24);
     f.render_widget(Clear, r);
     f.render_widget(Paragraph::new(lines).block(block), r);
 }
 
 fn render_errors(f: &mut Frame, area: Rect, app: &App) {
+    let g = app.state.lock().unwrap();
     let mut lines: Vec<Line> = Vec::new();
-    for e in app.scan.errors.iter().take(50) {
+    for e in g.errors.iter().take(50) {
         lines.push(Line::from(format!("{}: {}", e.path.display(), e.message)));
     }
-    if app.scan.overflow_errors {
+    if g.overflow_errors {
         lines.push(Line::from("(error log capped — additional errors dropped)"));
     }
     if lines.is_empty() {
@@ -474,7 +531,7 @@ fn render_errors(f: &mut Frame, area: Rect, app: &App) {
     }
     lines.push(Line::from(""));
     lines.push(Line::from("Press any key to dismiss."));
-    let title = format!(" Errors ({}) ", app.scan.errors.len());
+    let title = format!(" Errors ({}) ", g.errors.len());
     let block = Block::default().borders(Borders::ALL).title(title);
     let r = centered_rect(area, 80, 22);
     f.render_widget(Clear, r);
@@ -564,9 +621,39 @@ fn is_utf8_terminal() -> bool {
     v.contains("UTF-8") || v.contains("UTF8")
 }
 
+fn spinner_char() -> char {
+    const FRAMES: [char; 4] = ['|', '/', '-', '\\'];
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0);
+    FRAMES[((now_ms / 100) as usize) % FRAMES.len()]
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::scanner::{scan, scan_async, ScanOpts};
+
+    fn handle_from_sync(path: PathBuf, opts: ScanOpts) -> ScanHandle {
+        let result = scan(&path, &opts).unwrap();
+        ScanHandle {
+            state: Arc::new(Mutex::new(result)),
+            join_handle: None,
+        }
+    }
+
+    fn unique_temp(label: &str) -> PathBuf {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static N: AtomicU64 = AtomicU64::new(0);
+        let n = N.fetch_add(1, Ordering::SeqCst);
+        let pid = std::process::id();
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        std::env::temp_dir().join(format!("xdu-tui-{label}-{pid}-{nanos}-{n}"))
+    }
 
     #[test]
     fn truncate_left_short_unchanged() {
@@ -595,45 +682,6 @@ mod tests {
     }
 
     #[test]
-    fn bug001_ascend_at_root_walks_filesystem_parent() {
-        use crate::scanner::{scan, ScanOpts};
-        use std::fs;
-        use std::sync::atomic::{AtomicU64, Ordering};
-        static N: AtomicU64 = AtomicU64::new(9000);
-        let n = N.fetch_add(1, Ordering::SeqCst);
-        let nanos = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        let td_path = std::env::temp_dir().join(format!(
-            "xdu-tui-asc-{}-{}-{}",
-            std::process::id(),
-            nanos,
-            n
-        ));
-        let inner = td_path.join("inner");
-        fs::create_dir_all(&inner).unwrap();
-        fs::write(inner.join("a.txt"), b"hello").unwrap();
-
-        let opts = ScanOpts::default();
-        let r = scan(&inner, &opts).unwrap();
-        let mut app = App::new(inner.clone(), opts, r, SizeMode::Iec);
-
-        assert!(app.back_stack.is_empty());
-        assert_eq!(app.scan.tree.get(app.scan.tree.root()).unwrap().size, 5);
-
-        app.ascend();
-
-        let canonical_td = std::fs::canonicalize(&td_path).unwrap_or(td_path.clone());
-        let canonical_app = std::fs::canonicalize(&app.root_path).unwrap_or(app.root_path.clone());
-        assert_eq!(canonical_app, canonical_td);
-        let parent_size = app.scan.tree.get(app.scan.tree.root()).unwrap().size;
-        assert!(parent_size >= 5);
-
-        let _ = fs::remove_dir_all(&td_path);
-    }
-
-    #[test]
     fn sort_labels_cover_all_keys() {
         for k in [
             SortKey::SizeDesc,
@@ -645,5 +693,72 @@ mod tests {
         ] {
             assert!(!sort_label(k).is_empty());
         }
+    }
+
+    #[test]
+    fn spinner_char_is_one_of_the_frames() {
+        let c = spinner_char();
+        assert!(['|', '/', '-', '\\'].contains(&c));
+    }
+
+    #[test]
+    fn bug001_ascend_at_root_walks_filesystem_parent() {
+        let td_path = unique_temp("asc");
+        let inner = td_path.join("inner");
+        std::fs::create_dir_all(&inner).unwrap();
+        std::fs::write(inner.join("a.txt"), b"hello").unwrap();
+
+        let opts = ScanOpts::default();
+        let h = handle_from_sync(inner.clone(), opts.clone());
+        let mut app = App::new(inner.clone(), opts, h, SizeMode::Iec);
+
+        assert!(app.back_stack.is_empty());
+        let inner_size = app.lock().tree.get(app.current).unwrap().size;
+        assert_eq!(inner_size, 5);
+
+        app.ascend();
+
+        // After ascend, App started a fresh async scan of the parent. Wait
+        // for it to finish so the assertion is deterministic.
+        wait_for_running_false(&app, std::time::Duration::from_secs(5));
+
+        let canonical_td = std::fs::canonicalize(&td_path).unwrap_or(td_path.clone());
+        let canonical_app = std::fs::canonicalize(&app.root_path).unwrap_or(app.root_path.clone());
+        assert_eq!(canonical_app, canonical_td);
+        let parent_size = app.lock().tree.get(app.current).unwrap().size;
+        assert!(parent_size >= 5);
+
+        let _ = std::fs::remove_dir_all(&td_path);
+    }
+
+    fn wait_for_running_false(app: &App, timeout: std::time::Duration) {
+        let start = std::time::Instant::now();
+        while start.elapsed() < timeout {
+            if !app.lock().running {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+    }
+
+    #[test]
+    fn bug002_async_scan_progresses_to_finalized() {
+        let path = unique_temp("async");
+        std::fs::create_dir_all(&path).unwrap();
+        std::fs::write(path.join("a"), b"123").unwrap();
+        std::fs::create_dir(path.join("sub")).unwrap();
+        std::fs::write(path.join("sub").join("b"), b"4567").unwrap();
+
+        let handle = scan_async(path.clone(), ScanOpts::default()).expect("spawn");
+        let app = App::new(path.clone(), ScanOpts::default(), handle, SizeMode::Iec);
+
+        wait_for_running_false(&app, std::time::Duration::from_secs(5));
+        let g = app.lock();
+        assert!(!g.running);
+        assert!(g.tree.get(g.tree.root()).unwrap().finalized);
+        assert_eq!(g.tree.get(g.tree.root()).unwrap().size, 7);
+        drop(g);
+
+        let _ = std::fs::remove_dir_all(&path);
     }
 }

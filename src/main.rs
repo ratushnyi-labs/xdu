@@ -2,7 +2,7 @@ use std::path::PathBuf;
 use std::process;
 
 use xdu::format::SizeMode;
-use xdu::scanner::{scan, ScanOpts};
+use xdu::scanner::{scan_async, ScanOpts};
 use xdu::tui;
 
 fn main() {
@@ -25,15 +25,15 @@ fn main() {
         cross_fs: args.cross_fs,
         ..ScanOpts::default()
     };
-    let result = match scan(&args.path, &opts) {
-        Ok(r) => r,
+    let handle = match scan_async(args.path.clone(), opts.clone()) {
+        Ok(h) => h,
         Err(e) => {
             eprintln!("xdu: {e}");
             process::exit(2);
         }
     };
     let mode = if args.si { SizeMode::Si } else { SizeMode::Iec };
-    if let Err(e) = tui::run(args.path, opts, result, mode) {
+    if let Err(e) = tui::run(args.path, opts, handle, mode) {
         eprintln!("xdu: TUI error: {e}");
         process::exit(3);
     }
