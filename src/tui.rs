@@ -53,6 +53,10 @@ pub struct App {
     /// Active "file is locked" modal (BUG-004). Shown after a delete fails
     /// because another process holds the file open. Default focus on `[ Retry ]`.
     lock_prompt: Option<LockPrompt>,
+    /// Active "force-close handles?" sub-confirmation (TASK-006). Default
+    /// focus on `[ No ]`. Yes invokes `lock_detect::force_close_handles_for_path`
+    /// then re-runs `perform_delete` on the same target.
+    force_prompt: Option<ForceConfirmPrompt>,
     quit: bool,
 }
 
@@ -69,6 +73,14 @@ pub struct LockPrompt {
     path: PathBuf,
     holders: Vec<LockHolder>,
     retry_focused: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct ForceConfirmPrompt {
+    target: NodeId,
+    path: PathBuf,
+    holders: Vec<LockHolder>,
+    yes_focused: bool,
 }
 
 impl App {
@@ -94,6 +106,7 @@ impl App {
             status: None,
             confirm_prompt: None,
             lock_prompt: None,
+            force_prompt: None,
             quit: false,
         };
         s.sort_current();
@@ -415,6 +428,10 @@ impl App {
     }
 
     fn handle_prompt_key(&mut self, key: KeyCode) -> bool {
+        if self.force_prompt.is_some() {
+            self.handle_force_prompt_key(key);
+            return true;
+        }
         if self.lock_prompt.is_some() {
             self.handle_lock_prompt_key(key);
             return true;
@@ -465,6 +482,18 @@ impl App {
                 self.lock_prompt = None;
                 self.perform_delete(target);
             }
+            KeyCode::Char('f') | KeyCode::Char('F') => {
+                let target = prompt.target;
+                let path = prompt.path.clone();
+                let holders = prompt.holders.clone();
+                self.lock_prompt = None;
+                self.force_prompt = Some(ForceConfirmPrompt {
+                    target,
+                    path,
+                    holders,
+                    yes_focused: false,
+                });
+            }
             KeyCode::Tab
             | KeyCode::Left
             | KeyCode::Right
@@ -484,6 +513,59 @@ impl App {
             }
             _ => {}
         }
+    }
+
+    fn handle_force_prompt_key(&mut self, key: KeyCode) {
+        let Some(prompt) = self.force_prompt.as_mut() else {
+            return;
+        };
+        match key {
+            KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('n') | KeyCode::Char('N') => {
+                self.force_prompt = None;
+                self.status = Some("force-close cancelled".into());
+            }
+            KeyCode::Char('y') | KeyCode::Char('Y') => {
+                let target = prompt.target;
+                let path = prompt.path.clone();
+                let pids: Vec<u32> = prompt.holders.iter().map(|h| h.pid).collect();
+                self.force_prompt = None;
+                self.run_force_close_then_retry(target, &path, &pids);
+            }
+            KeyCode::Tab
+            | KeyCode::Left
+            | KeyCode::Right
+            | KeyCode::Char('h')
+            | KeyCode::Char('l') => {
+                prompt.yes_focused = !prompt.yes_focused;
+            }
+            KeyCode::Enter => {
+                let yes = prompt.yes_focused;
+                let target = prompt.target;
+                let path = prompt.path.clone();
+                let pids: Vec<u32> = prompt.holders.iter().map(|h| h.pid).collect();
+                self.force_prompt = None;
+                if yes {
+                    self.run_force_close_then_retry(target, &path, &pids);
+                } else {
+                    self.status = Some("force-close cancelled".into());
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn run_force_close_then_retry(&mut self, target: NodeId, path: &Path, pids: &[u32]) {
+        let n = lock_detect::force_close_handles_for_path(path, pids);
+        if n == 0 {
+            self.status = Some(format!(
+                "no handles closed (need same-user/admin privileges, or path could not be resolved); {} still locked",
+                path.display()
+            ));
+            return;
+        }
+        // Retry the delete now that the foreign handles are gone.
+        self.status = Some(format!("force-closed {n} handle(s); retrying delete"));
+        self.perform_delete(target);
     }
 }
 
@@ -568,6 +650,9 @@ fn render(f: &mut Frame, app: &App) {
     if let Some(prompt) = app.lock_prompt.as_ref() {
         render_lock_prompt(f, area, prompt);
     }
+    if let Some(prompt) = app.force_prompt.as_ref() {
+        render_force_prompt(f, area, prompt);
+    }
 }
 
 fn render_lock_prompt(f: &mut Frame, area: Rect, prompt: &LockPrompt) {
@@ -595,13 +680,60 @@ fn render_lock_prompt(f: &mut Frame, area: Rect, prompt: &LockPrompt) {
     lines.push(retry_buttons_line(prompt.retry_focused));
     lines.push(Line::from(""));
     lines.push(Line::from(
-        "Tab/Left/Right: toggle    Enter: activate    r: retry    n / Esc / q: cancel",
+        "Tab/Left/Right: toggle    Enter / r: retry    f: force-close handles    n / Esc / q: cancel",
     ));
     let block = Block::default()
         .borders(Borders::ALL)
         .title(" File is in use ");
     let h = (lines.len() as u16 + 2).min(area.height);
-    let r = centered_rect(area, 96, h);
+    let r = centered_rect(area, 100, h);
+    f.render_widget(Clear, r);
+    f.render_widget(Paragraph::new(lines).block(block), r);
+}
+
+fn render_force_prompt(f: &mut Frame, area: Rect, prompt: &ForceConfirmPrompt) {
+    let mut lines: Vec<Line> = Vec::new();
+    lines.push(Line::from(Span::styled(
+        format!(
+            "Force-close {} handle(s) on {} ?",
+            prompt.holders.len(),
+            prompt.path.display()
+        ),
+        Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+    )));
+    lines.push(Line::from(""));
+    lines.push(Line::from(
+        "This calls DuplicateHandle(DUPLICATE_CLOSE_SOURCE) on each holder's",
+    ));
+    lines.push(Line::from(
+        "file handle. The owning processes are NOT terminated, but the next",
+    ));
+    lines.push(Line::from(
+        "write through the now-invalid handle will fail; unsaved data in the",
+    ));
+    lines.push(Line::from("listed apps may be lost:"));
+    lines.push(Line::from(""));
+    for h in prompt.holders.iter().take(8) {
+        lines.push(Line::from(format!("    {} — {}", h.pid, h.name)));
+    }
+    if prompt.holders.len() > 8 {
+        lines.push(Line::from(format!(
+            "    … and {} more",
+            prompt.holders.len() - 8
+        )));
+    }
+    lines.push(Line::from(""));
+    lines.push(confirm_buttons_line(prompt.yes_focused));
+    lines.push(Line::from(""));
+    lines.push(Line::from(
+        "Tab/Left/Right: toggle    Enter: activate    y: yes    n / Esc / q: cancel",
+    ));
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(" Force-close handles? ")
+        .border_style(Style::default().fg(Color::Red));
+    let h = (lines.len() as u16 + 2).min(area.height);
+    let r = centered_rect(area, 100, h);
     f.render_widget(Clear, r);
     f.render_widget(Paragraph::new(lines).block(block), r);
 }
