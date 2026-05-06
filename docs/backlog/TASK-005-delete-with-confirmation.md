@@ -1,7 +1,8 @@
 # TASK-005 — delete file/dir with confirmation popup
 
-**Status:** IN PROGRESS  **Type:** TASK
-**User Mode:** GUIDED  **Guided Flow Stage:** BUILD
+**Status:** DONE  **Type:** TASK
+**User Mode:** GUIDED  **Guided Flow Stage:** POST_AUDIT
+Pre-merge baseline security gate: PASS — BR-001 amended in spec before any code; default prompt focus is `[ No ]` (test `task005_confirm_buttons_default_focus_no`); scan-root deletion refused (test `task005_refuses_to_delete_scan_root`); Windows in-use error codes (5 / 32 / 33) trigger an actionable hint pointing at Sysinternals; no `unsafe`; no new crate dep; v0.1 forcible-unlock and trash deferred to LATER-007 / LATER-008. 88 tests pass (82 unit + 6 integration). Multi-target rebuild within budget (~657 / 657 / 514 KiB).
 **Created:** 2026-05-06  **Updated:** 2026-05-06
 
 ## Raw Request

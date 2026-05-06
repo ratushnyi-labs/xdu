@@ -56,9 +56,10 @@ xdu --help
 xdu /path/to/inspect
 ```
 
-`xdu` is **read-only**. It performs no `unlink`, `rename`, `chmod`, or
-`truncate` syscalls. Running it on `/`, `C:\`, or any production path
-cannot modify a file — see [`docs/spec.md`](spec.md) §4 BR-001.
+`xdu` is **read-only by default**. The only filesystem-mutating action is
+the explicit `d` keybinding (delete), which opens a confirmation modal
+whose default focus is `[ No ]` — see [`docs/spec.md`](spec.md) §4 BR-001
+(amended) and §6 UC-008. There is no `rename`/`chmod`/`truncate` path.
 
 ## Uninstall
 

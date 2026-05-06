@@ -95,7 +95,9 @@ fn print_help() {
     println!("  Up/k Down/j   move      s    cycle sort     ?/F1   help");
     println!("  Right/l Enter enter     u    toggle units   q/^C   quit");
     println!("  Left/h Bksp   up        r    rescan         e      export");
+    println!("                          d    delete (with [No]-default prompt)");
     println!("                          !    show errors");
     println!();
-    println!("xdu is read-only; no file is ever modified or deleted.");
+    println!("xdu is read-only by default; deletion is exposed only behind 'd'");
+    println!("plus a confirmation modal whose default focus is [ No ].");
 }

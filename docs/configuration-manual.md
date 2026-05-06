@@ -81,8 +81,9 @@ or update checking — it makes no network calls anywhere.
 | `Home` / `End` | Jump to first / last entry.                                              |
 | `s`            | Cycle sort key (size↓ → name↑ → count↓ → size↑ → name↓ → count↑ → …).   |
 | `u`            | Toggle IEC / SI size units.                                              |
-| `r`            | Rescan from root (synchronous; v0.2 will offer per-subtree async rescan). |
+| `r`            | Rescan from root (asynchronous; per-subtree refresh deferred to v0.2).   |
 | `e`            | Export the current subtree to `xdu-export.json` in CWD.                  |
+| `d`            | **Delete** selected entry (file or recursive directory). Opens a confirmation modal; default focus is `[ No ]`. `Tab`/arrows toggle, `Enter` activates, `y` quick-confirm, `n`/`Esc`/`q` cancel. Refuses to remove the scan root. Files in use produce an actionable hint pointing at Sysinternals Process Explorer / Resource Monitor. |
 | `!`            | Show error log overlay.                                                  |
 | `?` / `F1`     | Show help overlay.                                                       |
 | `q` / Ctrl-C   | Quit (terminal restored on every exit path including panic).            |
@@ -97,8 +98,18 @@ or update checking — it makes no network calls anywhere.
 ## What `xdu` will NEVER do
 
 - Read file contents (only metadata).
-- Modify, delete, or move any file.
+- Rename, `chmod`, or `truncate` any file.
+- Move/modify any file outside the explicit `d`-key delete path.
 - Open network sockets.
 - Spawn subprocesses.
 - Send telemetry or analytics anywhere.
 - Persist state between runs (no cache, no config file).
+
+## What `xdu` CAN do (with explicit user confirmation)
+
+- Delete a file via `d` + Yes-focus + Enter (or `d` + `y`).
+- Delete a directory recursively (same flow). The recursive removal uses
+  `std::fs::remove_dir_all`. No trash / Recycle Bin support — deletes are
+  permanent. (`LATER-007` follow-up: opt-in trash mode.)
+- Write the JSON export to a user-specified path via `e`.
+- Update the help/footer text in response to keypresses.

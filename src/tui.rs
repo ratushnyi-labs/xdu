@@ -45,7 +45,18 @@ pub struct App {
     show_errors: bool,
     size_mode: SizeMode,
     status: Option<String>,
+    /// Active confirmation modal (currently only used by `d` / delete). When
+    /// `Some`, all keystrokes route through `handle_prompt_key`. Default focus
+    /// on a fresh prompt is `[ No ]` (`yes_focused = false`) per BR-001 amend.
+    confirm_prompt: Option<ConfirmPrompt>,
     quit: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct ConfirmPrompt {
+    target: NodeId,
+    message: String,
+    yes_focused: bool,
 }
 
 impl App {
@@ -69,6 +80,7 @@ impl App {
             show_errors: false,
             size_mode,
             status: None,
+            confirm_prompt: None,
             quit: false,
         };
         s.sort_current();
@@ -168,26 +180,28 @@ impl App {
     }
 
     fn start_new_scan(&mut self, path: PathBuf, ok_msg: &str) {
-        match scan_async(path.clone(), self.opts.clone()) {
-            Ok(handle) => {
-                self.state = handle.state;
-                self._scan_thread = handle.join_handle;
-                self.root_path = path;
-                let new_root = self.lock().tree.root();
-                self.current = new_root;
-                self.selection = 0;
-                self.back_stack.clear();
-                self.sort_current();
-                self.status = Some(ok_msg.to_string());
-            }
-            Err(e) => {
-                self.status = Some(format!("scan failed: {e}"));
-                self.lock().errors.push(ScanError {
-                    path: PathBuf::new(),
-                    message: format!("{e}"),
-                });
-            }
+        if let Err(e) = self.spawn_scan(path) {
+            self.status = Some(format!("scan failed: {e}"));
+            self.lock().errors.push(ScanError {
+                path: PathBuf::new(),
+                message: format!("{e}"),
+            });
+            return;
         }
+        self.status = Some(ok_msg.to_string());
+    }
+
+    fn spawn_scan(&mut self, path: PathBuf) -> Result<(), ScanError> {
+        let handle = scan_async(path.clone(), self.opts.clone())?;
+        self.state = handle.state;
+        self._scan_thread = handle.join_handle;
+        self.root_path = path;
+        let new_root = self.lock().tree.root();
+        self.current = new_root;
+        self.selection = 0;
+        self.back_stack.clear();
+        self.sort_current();
+        Ok(())
     }
 
     fn cycle_sort(&mut self) {
@@ -215,6 +229,93 @@ impl App {
         self.start_new_scan(path, "rescan started");
     }
 
+    fn absolute_path_for(&self, node_id: NodeId) -> Option<PathBuf> {
+        let parts: Vec<String> = {
+            let g = self.lock();
+            g.tree.path(node_id).into_iter().map(String::from).collect()
+        };
+        if parts.is_empty() {
+            return None;
+        }
+        let mut path = self.root_path.clone();
+        for part in parts.into_iter().skip(1) {
+            path.push(part);
+        }
+        Some(path)
+    }
+
+    fn is_scan_root(&self, path: &Path) -> bool {
+        let canonical_target = std::fs::canonicalize(path).ok();
+        let canonical_root = std::fs::canonicalize(&self.root_path).ok();
+        match (canonical_target, canonical_root) {
+            (Some(a), Some(b)) => a == b,
+            _ => path == self.root_path,
+        }
+    }
+
+    fn start_delete_prompt(&mut self) {
+        let offset = self.dotdot_offset();
+        if offset == 1 && self.selection == 0 {
+            self.status = Some("cannot delete '..'".into());
+            return;
+        }
+        let target = {
+            let g = self.lock();
+            let kids: Vec<NodeId> = g.tree.children(self.current).collect();
+            kids.get(self.selection.saturating_sub(offset)).copied()
+        };
+        let Some(target) = target else { return };
+        let Some(path) = self.absolute_path_for(target) else {
+            return;
+        };
+        if self.is_scan_root(&path) {
+            self.status = Some("cannot delete the scan root".into());
+            return;
+        }
+        let kind = self.lock().tree.get(target).map(|n| n.kind);
+        let kind_label = match kind {
+            Some(NodeKind::Dir) => "directory (recursive)",
+            Some(NodeKind::Symlink) => "symlink",
+            _ => "file",
+        };
+        let message = format!(
+            "Delete {} ?\n  {}\nThis cannot be undone.",
+            kind_label,
+            path.display()
+        );
+        self.confirm_prompt = Some(ConfirmPrompt {
+            target,
+            message,
+            yes_focused: false,
+        });
+    }
+
+    fn perform_delete(&mut self, node_id: NodeId) {
+        let Some(path) = self.absolute_path_for(node_id) else {
+            self.status = Some("delete: cannot resolve path".into());
+            return;
+        };
+        if self.is_scan_root(&path) {
+            self.status = Some("delete: refusing to remove the scan root".into());
+            return;
+        }
+        let result = if path.is_dir() {
+            std::fs::remove_dir_all(&path)
+        } else {
+            std::fs::remove_file(&path)
+        };
+        let msg = match result {
+            Ok(_) => {
+                let m = format!("deleted {}", path.display());
+                let root = self.root_path.clone();
+                let _ = self.spawn_scan(root);
+                m
+            }
+            Err(e) => format_delete_error(&path, &e),
+        };
+        self.status = Some(msg);
+    }
+
     fn export(&mut self) {
         let path: PathBuf = "xdu-export.json".into();
         let result = {
@@ -229,9 +330,15 @@ impl App {
 
     fn handle_key(&mut self, key: KeyCode, mods: KeyModifiers) {
         self.status = None;
-        if (key == KeyCode::Char('c') && mods.contains(KeyModifiers::CONTROL))
-            || matches!(key, KeyCode::Char('q'))
-        {
+        // Ctrl-C always quits, even from a modal prompt.
+        if key == KeyCode::Char('c') && mods.contains(KeyModifiers::CONTROL) {
+            self.quit = true;
+            return;
+        }
+        if self.handle_prompt_key(key) {
+            return;
+        }
+        if matches!(key, KeyCode::Char('q')) {
             self.quit = true;
             return;
         }
@@ -255,8 +362,53 @@ impl App {
             KeyCode::Char('u') => self.toggle_size_mode(),
             KeyCode::Char('r') => self.rescan(),
             KeyCode::Char('e') => self.export(),
+            KeyCode::Char('d') => self.start_delete_prompt(),
             _ => {}
         }
+    }
+
+    fn handle_prompt_key(&mut self, key: KeyCode) -> bool {
+        let Some(prompt) = self.confirm_prompt.as_mut() else {
+            return false;
+        };
+        match key {
+            KeyCode::Esc | KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Char('q') => {
+                self.confirm_prompt = None;
+            }
+            KeyCode::Char('y') | KeyCode::Char('Y') => {
+                let target = prompt.target;
+                self.confirm_prompt = None;
+                self.perform_delete(target);
+            }
+            KeyCode::Tab
+            | KeyCode::Left
+            | KeyCode::Right
+            | KeyCode::Char('h')
+            | KeyCode::Char('l') => {
+                prompt.yes_focused = !prompt.yes_focused;
+            }
+            KeyCode::Enter => {
+                let yes = prompt.yes_focused;
+                let target = prompt.target;
+                self.confirm_prompt = None;
+                if yes {
+                    self.perform_delete(target);
+                }
+            }
+            _ => {}
+        }
+        true
+    }
+}
+
+fn format_delete_error(path: &Path, e: &io::Error) -> String {
+    let raw = e.raw_os_error().unwrap_or(0);
+    match raw {
+        5 | 32 | 33 => format!(
+            "delete failed: {} is in use. Close the holding app (e.g. with Sysinternals Process Explorer or Resource Monitor) and try again.",
+            path.display()
+        ),
+        _ => format!("delete failed: {}: {}", path.display(), e),
     }
 }
 
@@ -324,6 +476,54 @@ fn render(f: &mut Frame, app: &App) {
     if app.show_errors {
         render_errors(f, area, app);
     }
+    if let Some(prompt) = app.confirm_prompt.as_ref() {
+        render_confirm(f, area, prompt);
+    }
+}
+
+fn render_confirm(f: &mut Frame, area: Rect, prompt: &ConfirmPrompt) {
+    let mut lines: Vec<Line> = prompt
+        .message
+        .lines()
+        .map(|l| Line::from(l.to_string()))
+        .collect();
+    lines.push(Line::from(""));
+    lines.push(confirm_buttons_line(prompt.yes_focused));
+    lines.push(Line::from(""));
+    lines.push(Line::from(
+        "Tab/Left/Right: toggle    Enter: activate    y: yes    n / Esc / q: cancel",
+    ));
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(" Confirm delete ");
+    let h = (lines.len() as u16 + 2).min(area.height);
+    let r = centered_rect(area, 84, h);
+    f.render_widget(Clear, r);
+    f.render_widget(Paragraph::new(lines).block(block), r);
+}
+
+fn confirm_buttons_line(yes_focused: bool) -> Line<'static> {
+    let yes_style = if yes_focused {
+        Style::default()
+            .add_modifier(Modifier::REVERSED)
+            .fg(Color::Red)
+    } else {
+        Style::default().fg(Color::DarkGray)
+    };
+    let no_style = if !yes_focused {
+        Style::default()
+            .add_modifier(Modifier::REVERSED)
+            .fg(Color::Green)
+    } else {
+        Style::default().fg(Color::DarkGray)
+    };
+    Line::from(vec![
+        Span::raw("    "),
+        Span::styled(" Yes ", yes_style),
+        Span::raw("        "),
+        Span::styled(" No ", no_style),
+        Span::raw("    "),
+    ])
 }
 
 fn render_header(f: &mut Frame, area: Rect, app: &App, state: &ScanResult) {
@@ -525,11 +725,13 @@ fn render_help(f: &mut Frame, area: Rect) {
         Line::from("  u               toggle KiB / KB units"),
         Line::from("  r               rescan from root (async)"),
         Line::from("  e               export current subtree to xdu-export.json"),
+        Line::from("  d               delete the selected entry (with confirmation)"),
         Line::from("  !               show errors"),
         Line::from("  ? / F1          this help"),
         Line::from("  q / Ctrl-C      quit"),
         Line::from(""),
-        Line::from("xdu is read-only; no file is ever modified or deleted."),
+        Line::from("xdu is read-only by default; deletion is exposed only behind 'd'"),
+        Line::from("plus a confirmation modal whose default focus is [ No ]."),
         Line::from("Cells with a spinner are not yet calculated; they update live."),
         Line::from(""),
         Line::from("Press any key to dismiss."),
@@ -762,6 +964,133 @@ mod tests {
             }
             std::thread::sleep(std::time::Duration::from_millis(20));
         }
+    }
+
+    #[test]
+    fn compose_footer_pads_when_both_fit() {
+        let s = compose_footer(" left ", " right ", 20);
+        assert_eq!(s.chars().count(), 20);
+        assert!(s.starts_with(" left "));
+        assert!(s.ends_with(" right "));
+    }
+
+    #[test]
+    fn compose_footer_truncates_left_when_narrow() {
+        let s = compose_footer(" sort:size  errors:0  ?:help ", " free: 10 GiB (50%) ", 25);
+        assert!(s.contains("free:"));
+    }
+
+    #[test]
+    fn compose_footer_empty_right_just_truncates() {
+        let s = compose_footer(" hello ", "", 100);
+        assert_eq!(s, " hello ");
+    }
+
+    #[test]
+    fn task005_confirm_buttons_default_focus_no() {
+        // yes_focused = false -> No is highlighted, Yes is dim.
+        let line = confirm_buttons_line(false);
+        let spans = line.spans;
+        // Find the spans for Yes and No labels.
+        let yes_span = spans
+            .iter()
+            .find(|s| s.content.contains("Yes"))
+            .expect("Yes span present");
+        let no_span = spans
+            .iter()
+            .find(|s| s.content.contains("No"))
+            .expect("No span present");
+        assert!(
+            no_span.style.add_modifier.contains(Modifier::REVERSED),
+            "No must be reverse-video on default focus"
+        );
+        assert!(
+            !yes_span.style.add_modifier.contains(Modifier::REVERSED),
+            "Yes must NOT be reverse-video on default focus"
+        );
+    }
+
+    #[test]
+    fn task005_confirm_buttons_yes_focused_swaps() {
+        let line = confirm_buttons_line(true);
+        let yes = line
+            .spans
+            .iter()
+            .find(|s| s.content.contains("Yes"))
+            .unwrap();
+        let no = line
+            .spans
+            .iter()
+            .find(|s| s.content.contains("No"))
+            .unwrap();
+        assert!(yes.style.add_modifier.contains(Modifier::REVERSED));
+        assert!(!no.style.add_modifier.contains(Modifier::REVERSED));
+    }
+
+    #[test]
+    fn task005_open_prompt_then_cancel_does_not_delete() {
+        let td_path = unique_temp("del-cancel");
+        std::fs::create_dir_all(&td_path).unwrap();
+        let target = td_path.join("a.txt");
+        std::fs::write(&target, b"keepme").unwrap();
+
+        let opts = ScanOpts::default();
+        let h = handle_from_sync(td_path.clone(), opts.clone());
+        let mut app = App::new(td_path.clone(), opts, h, SizeMode::Iec);
+        // Select the only entry (offset 0 since at scan root with no FS parent
+        // detectable to test scan setup; we just pick selection 0 directly).
+        app.selection = if app.dotdot_offset() == 1 { 1 } else { 0 };
+        app.start_delete_prompt();
+        assert!(app.confirm_prompt.is_some(), "prompt should open");
+        // Cancel via Esc.
+        app.handle_key(KeyCode::Esc, KeyModifiers::NONE);
+        assert!(app.confirm_prompt.is_none(), "prompt should close");
+        assert!(target.exists(), "file must NOT be deleted on cancel");
+
+        let _ = std::fs::remove_dir_all(&td_path);
+    }
+
+    #[test]
+    fn task005_yes_actually_deletes_file() {
+        let td_path = unique_temp("del-yes");
+        std::fs::create_dir_all(&td_path).unwrap();
+        let target = td_path.join("byebye.txt");
+        std::fs::write(&target, b"goodbye").unwrap();
+
+        let opts = ScanOpts::default();
+        let h = handle_from_sync(td_path.clone(), opts.clone());
+        let mut app = App::new(td_path.clone(), opts, h, SizeMode::Iec);
+        app.selection = if app.dotdot_offset() == 1 { 1 } else { 0 };
+        app.start_delete_prompt();
+        assert!(app.confirm_prompt.is_some());
+        // Toggle to Yes via Tab, then Enter.
+        app.handle_key(KeyCode::Tab, KeyModifiers::NONE);
+        app.handle_key(KeyCode::Enter, KeyModifiers::NONE);
+        assert!(app.confirm_prompt.is_none());
+        assert!(!target.exists(), "file must be deleted after Yes+Enter");
+
+        let _ = std::fs::remove_dir_all(&td_path);
+    }
+
+    #[test]
+    fn task005_refuses_to_delete_scan_root() {
+        let td_path = unique_temp("del-root");
+        std::fs::create_dir_all(&td_path).unwrap();
+        std::fs::write(td_path.join("x"), b"y").unwrap();
+
+        let opts = ScanOpts::default();
+        let h = handle_from_sync(td_path.clone(), opts.clone());
+        let mut app = App::new(td_path.clone(), opts, h, SizeMode::Iec);
+        // Force the operation by calling perform_delete on the root NodeId.
+        let root_id = app.lock().tree.root();
+        app.perform_delete(root_id);
+        assert!(td_path.exists(), "scan root must not be deleted");
+        assert!(app
+            .status
+            .as_deref()
+            .unwrap_or_default()
+            .contains("scan root"),);
+        let _ = std::fs::remove_dir_all(&td_path);
     }
 
     #[test]

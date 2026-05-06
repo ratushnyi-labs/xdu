@@ -14,10 +14,13 @@ platform, well under 1 MiB.
 
 `xdu` scans a directory and lets you navigate the result with the keyboard.
 Each row shows the entry's share of its parent as a bar plus the absolute
-size in `B`/`KiB`/`MiB`/`GiB`/`TiB` (or SI units with `--si`).
+size in `B`/`KiB`/`MiB`/`GiB`/`TiB` (or SI units with `--si`). The footer's
+right edge shows free space on the volume containing the scan root.
 
-The tool is **strictly read-only**: it cannot delete, rename, or modify
-any file under any code path. No network calls, no telemetry.
+`xdu` is **read-only by default**. The only filesystem-mutating action is
+the explicit `d` keybinding, which opens a confirmation modal whose default
+focus is `[ No ]`. There is no `rename` / `chmod` / `truncate` path.
+No network calls, no telemetry.
 
 ## Features
 
@@ -71,6 +74,7 @@ target details and per-platform notes.
 | `u` | toggle IEC / SI units |
 | `r` | rescan from root |
 | `e` | export current subtree to `xdu-export.json` |
+| `d` | **delete** selected entry (with `[ No ]`-default confirmation modal) |
 | `!` | show error log |
 | `?` / `F1` | show help |
 | `q` / Ctrl-C | quit |

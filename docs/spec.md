@@ -512,6 +512,9 @@ do not encounter them as surprises.
 | TUI snapshot test harness deferred (M / §13.3.4)    | UI baselines stored as paths in this spec are NOT validated automatically in v0.1.0. Visual inspection at release. | v0.2 / `LATER-004` |
 | macOS targets not built by default                  | Built only when `osxcross` SDK is present. Users on macOS build from source via host toolchain. | v0.2 / `LATER-005` |
 | Coverage measurement not wired (M / §7.1)           | 100% line/branch/function coverage is enforced by writing tests for every function; not measured by `cargo-llvm-cov`. | v0.2 / `LATER-006` |
+| Delete is permanent (no trash) — TASK-005           | `d` calls `remove_file` / `remove_dir_all` directly. v0.2 may offer a `--trash` flag (`IFileOperation` on Windows / `gio trash` on Linux). | v0.2 / `LATER-007` |
+| Forcible unlock of locked Windows files — TASK-005  | `xdu` shows an actionable error pointing at Sysinternals Process Explorer / Resource Monitor; it does not call RestartManager / NtClose to forcibly close foreign handles. | v0.2 / `LATER-008` |
+| Free-space lookup on macOS / BSD — TASK-004         | Linux `statvfs` and Windows `GetDiskFreeSpaceExW` covered. Other Unix returns empty footer right segment. | v0.2 / `LATER-009` |
 
 ## 10. Inventory references
 
