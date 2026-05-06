@@ -109,7 +109,7 @@ Each leaf MUST be re-estimated independently and reach `ABOVE_EASY` or `EASY` be
 | TASK-001-I          | Tree view widget (FE)                            | FRONTEND | ABOVE_EASY| F, G, H       | DONE          |
 | TASK-001-J          | Header + footer + help overlay (FE)              | FRONTEND | EASY     | H             | DONE          |
 | TASK-001-K          | Refresh / rescan flow                            | INTEG    | EASY     | E, I          | DONE          |
-| TASK-001-L          | JSON export                                      | BACKEND  | EASY     | F             | READY         |
+| TASK-001-L          | JSON export                                      | BACKEND  | EASY     | F             | DONE          |
 | TASK-001-M          | Test suite (unit + integration + TUI snapshot)   | TEST     | ABOVE_EASY| E, F, G, H, I | READY         |
 | TASK-001-N          | Documentation (manuals + README final)           | DOC      | EASY     | all of E–L    | READY         |
 

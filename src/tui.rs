@@ -2,6 +2,7 @@
 //! overlays, and rescan flow. Combines TASK-001-H/I/J/K leaves into one
 //! module to keep cross-references compact.
 
+use crate::export;
 use crate::format::{bar, format_size, SizeMode};
 use crate::scanner::{scan, ScanOpts, ScanResult};
 use crate::tree::{NodeId, NodeKind, SortKey};
@@ -32,6 +33,7 @@ pub struct App {
     show_help: bool,
     show_errors: bool,
     size_mode: SizeMode,
+    status: Option<String>,
     quit: bool,
 }
 
@@ -53,6 +55,7 @@ impl App {
             show_help: false,
             show_errors: false,
             size_mode,
+            status: None,
             quit: false,
         };
         let cur = s.current;
@@ -125,12 +128,25 @@ impl App {
                 self.back_stack.clear();
                 let cur = self.current;
                 self.scan.tree.sort(cur, self.sort);
+                self.status = Some("rescan complete".to_string());
             }
-            Err(e) => self.scan.errors.push(e),
+            Err(e) => {
+                self.status = Some(format!("rescan failed: {e}"));
+                self.scan.errors.push(e);
+            }
+        }
+    }
+
+    fn export(&mut self) {
+        let path: PathBuf = "xdu-export.json".into();
+        match export::write_to_path(&self.scan.tree, self.current, &self.opts, &path) {
+            Ok(_) => self.status = Some(format!("exported to {}", path.display())),
+            Err(e) => self.status = Some(format!("export failed: {e}")),
         }
     }
 
     fn handle_key(&mut self, key: KeyCode, mods: KeyModifiers) {
+        self.status = None;
         if (key == KeyCode::Char('c') && mods.contains(KeyModifiers::CONTROL))
             || matches!(key, KeyCode::Char('q'))
         {
@@ -153,9 +169,10 @@ impl App {
             KeyCode::End => self.selection = self.children_count().saturating_sub(1),
             KeyCode::Char('s') => self.cycle_sort(),
             KeyCode::Char('?') | KeyCode::F(1) => self.show_help = true,
-            KeyCode::Char('e') => self.show_errors = true,
+            KeyCode::Char('!') => self.show_errors = true,
             KeyCode::Char('u') => self.toggle_size_mode(),
             KeyCode::Char('r') => self.rescan(),
+            KeyCode::Char('e') => self.export(),
             _ => {}
         }
     }
@@ -266,12 +283,15 @@ fn render_body(f: &mut Frame, area: Rect, app: &App) {
 }
 
 fn render_footer(f: &mut Frame, area: Rect, app: &App) {
-    let nerr = app.scan.errors.len();
-    let s = format!(
-        " sort:{}  errors:{}  ?:help  s:sort  u:unit  r:rescan  e:errors  q:quit ",
-        sort_label(app.sort),
-        nerr
-    );
+    let s = if let Some(msg) = app.status.as_deref() {
+        format!(" {msg}  (any key to dismiss) ")
+    } else {
+        format!(
+            " sort:{}  errors:{}  ?:help  s:sort  u:unit  r:rescan  e:export  !:errors  q:quit ",
+            sort_label(app.sort),
+            app.scan.errors.len()
+        )
+    };
     let s = truncate_left(&s, area.width as usize);
     let style = Style::default().add_modifier(Modifier::REVERSED);
     f.render_widget(Paragraph::new(s).style(style), area);
@@ -290,7 +310,8 @@ fn render_help(f: &mut Frame, area: Rect) {
         Line::from("  s               cycle sort"),
         Line::from("  u               toggle KiB / KB units"),
         Line::from("  r               rescan from root (synchronous)"),
-        Line::from("  e               show errors"),
+        Line::from("  e               export current subtree to xdu-export.json"),
+        Line::from("  !               show errors"),
         Line::from("  ? / F1          this help"),
         Line::from("  q / Ctrl-C      quit"),
         Line::from(""),

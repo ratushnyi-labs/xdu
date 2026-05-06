@@ -1,7 +1,8 @@
 # TASK-001-L — JSON export
 
-**Status:** READY  **Type:** TASK  **Parent:** TASK-001
-**User Mode:** GUIDED  **Guided Flow Stage:** PLAN_READY
+**Status:** DONE  **Type:** TASK  **Parent:** TASK-001
+**User Mode:** GUIDED  **Guided Flow Stage:** POST_AUDIT
+Pre-merge baseline security gate: PASS (NUL/`..`/`/proc /sys /dev` path rejection; iterative tree walk safe to 50k depth; JSON escapes `0x00–0x1F`; no unsafe; no new deps). Speck: `docs/specks/SDD-TASK-001-L-json-export.md`. Implementation: `src/export.rs`, wired in `src/tui.rs::App::export` and bound to `e` keybinding.
 **Created:** 2026-05-06  **Updated:** 2026-05-06
 
 ## Refined Description
