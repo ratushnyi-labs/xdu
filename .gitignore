@@ -1,0 +1,32 @@
+# Build artifacts
+/target/
+/out/
+
+# Dev volumes / temp dirs (lawbook §8.3)
+/.dev-data/
+/.dev-temp/
+
+# Local secrets / env (.env.example IS tracked)
+.env
+.env.*
+!.env.example
+
+# IDE
+.idea/
+.vscode/
+*.iml
+*.swp
+*.swo
+
+# OS noise
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Coverage / profiling
+/coverage/
+*.profraw
+*.profdata
+
+# Rust-specific
+**/*.rs.bk

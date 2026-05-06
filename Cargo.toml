@@ -1,0 +1,31 @@
+[package]
+name = "xdu"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.78"
+license = "MIT"
+description = "Read-only disk-usage explorer with terminal UI"
+readme = "README.md"
+repository = ""
+keywords = ["disk-usage", "tui", "cli", "filesystem", "ncdu"]
+categories = ["command-line-utilities", "filesystem"]
+
+[[bin]]
+name = "xdu"
+path = "src/main.rs"
+
+[dependencies]
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+
+[profile.release-min]
+inherits = "release"
+opt-level = "z"
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = "symbols"
+debug = false
+overflow-checks = false
