@@ -172,7 +172,13 @@ flowchart TD
 
 **Description:** after a scan completes, the user navigates with arrow keys (Up/Down to
 move within a directory, Right/Enter to descend, Left/Backspace to ascend). vi-style
-`hjkl` MUST also work. Navigation is read-only and bounded (cannot go above the scan root).
+`hjkl` MUST also work. Navigation is read-only.
+
+When the user ascends from the scan root with an empty back-stack, `xdu` triggers a
+synchronous scan of the filesystem parent directory and resets navigation to the
+parent-rooted view. When the current root is already the filesystem root (e.g. `/`
+on Unix), the action is a no-op with a status message. This behavior fixes BUG-001
+and amends the prior "cannot go above scan root" wording.
 
 **Related BR/WF:** WF-002.
 

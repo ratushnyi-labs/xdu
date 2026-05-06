@@ -19,7 +19,7 @@ use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 use ratatui::Frame;
 use ratatui::Terminal;
 use std::io::{self, stdout, Stdout};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 pub struct App {
@@ -96,6 +96,34 @@ impl App {
         if let Some((parent, sel)) = self.back_stack.pop() {
             self.current = parent;
             self.selection = sel;
+            return;
+        }
+        self.scan_filesystem_parent();
+    }
+
+    fn scan_filesystem_parent(&mut self) {
+        let canonical =
+            std::fs::canonicalize(&self.root_path).unwrap_or_else(|_| self.root_path.clone());
+        let Some(parent) = canonical.parent().map(Path::to_path_buf) else {
+            self.status = Some("at filesystem root — cannot go up".into());
+            return;
+        };
+        if parent == canonical {
+            self.status = Some("at filesystem root — cannot go up".into());
+            return;
+        }
+        match scan(&parent, &self.opts) {
+            Ok(r) => {
+                self.root_path = parent;
+                self.scan = r;
+                self.current = self.scan.tree.root();
+                self.selection = 0;
+                self.back_stack.clear();
+                let cur = self.current;
+                self.scan.tree.sort(cur, self.sort);
+                self.status = Some("scanned parent directory".into());
+            }
+            Err(e) => self.status = Some(format!("cannot scan parent: {e}")),
         }
     }
 
@@ -304,7 +332,7 @@ fn render_help(f: &mut Frame, area: Rect) {
         Line::from("  Up / k          move up"),
         Line::from("  Down / j        move down"),
         Line::from("  Right/l/Enter   enter directory"),
-        Line::from("  Left/h/Bksp     go up"),
+        Line::from("  Left/h/Bksp     go up (rescans FS parent at scan root)"),
         Line::from("  PgUp / PgDn     page"),
         Line::from("  Home / End      jump"),
         Line::from("  s               cycle sort"),
@@ -456,6 +484,45 @@ mod tests {
         assert_eq!(display_name("a", NodeKind::Dir), "a/");
         assert_eq!(display_name("a", NodeKind::Symlink), "a@");
         assert_eq!(display_name("a", NodeKind::File), "a");
+    }
+
+    #[test]
+    fn bug001_ascend_at_root_walks_filesystem_parent() {
+        use crate::scanner::{scan, ScanOpts};
+        use std::fs;
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static N: AtomicU64 = AtomicU64::new(9000);
+        let n = N.fetch_add(1, Ordering::SeqCst);
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let td_path = std::env::temp_dir().join(format!(
+            "xdu-tui-asc-{}-{}-{}",
+            std::process::id(),
+            nanos,
+            n
+        ));
+        let inner = td_path.join("inner");
+        fs::create_dir_all(&inner).unwrap();
+        fs::write(inner.join("a.txt"), b"hello").unwrap();
+
+        let opts = ScanOpts::default();
+        let r = scan(&inner, &opts).unwrap();
+        let mut app = App::new(inner.clone(), opts, r, SizeMode::Iec);
+
+        assert!(app.back_stack.is_empty());
+        assert_eq!(app.scan.tree.get(app.scan.tree.root()).unwrap().size, 5);
+
+        app.ascend();
+
+        let canonical_td = std::fs::canonicalize(&td_path).unwrap_or(td_path.clone());
+        let canonical_app = std::fs::canonicalize(&app.root_path).unwrap_or(app.root_path.clone());
+        assert_eq!(canonical_app, canonical_td);
+        let parent_size = app.scan.tree.get(app.scan.tree.root()).unwrap().size;
+        assert!(parent_size >= 5);
+
+        let _ = fs::remove_dir_all(&td_path);
     }
 
     #[test]
