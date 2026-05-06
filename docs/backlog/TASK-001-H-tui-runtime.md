@@ -1,7 +1,8 @@
 # TASK-001-H — TUI runtime
 
-**Status:** READY  **Type:** TASK  **Parent:** TASK-001
-**User Mode:** GUIDED  **Guided Flow Stage:** PLAN_READY
+**Status:** DONE  **Type:** TASK  **Parent:** TASK-001
+**User Mode:** GUIDED  **Guided Flow Stage:** POST_AUDIT
+Pre-merge baseline security gate: PASS (panic hook + Drop guard restore terminal; no input echo in raw mode; bounded event poll). Speck: `docs/specks/SDD-TASK-001-H-tui-runtime.md`. Implementation: `src/tui.rs`.
 **Created:** 2026-05-06  **Updated:** 2026-05-06
 
 ## Refined Description

@@ -1,7 +1,8 @@
 # TASK-001-I — Tree view widget
 
-**Status:** READY  **Type:** TASK  **Parent:** TASK-001
-**User Mode:** GUIDED  **Guided Flow Stage:** PLAN_READY
+**Status:** DONE  **Type:** TASK  **Parent:** TASK-001
+**User Mode:** GUIDED  **Guided Flow Stage:** POST_AUDIT
+Pre-merge baseline security gate: PASS (filename sanitization escapes control codes; width-bounded layout; truncate_left tests cover edge). Speck: `docs/specks/SDD-TASK-001-I-tree-view.md`. Implementation: `src/tui.rs`.
 **Created:** 2026-05-06  **Updated:** 2026-05-06
 
 ## Refined Description

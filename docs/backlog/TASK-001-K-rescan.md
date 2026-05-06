@@ -1,7 +1,8 @@
 # TASK-001-K — Rescan / refresh flow
 
-**Status:** READY  **Type:** TASK  **Parent:** TASK-001
-**User Mode:** GUIDED  **Guided Flow Stage:** PLAN_READY
+**Status:** DONE  **Type:** TASK  **Parent:** TASK-001
+**User Mode:** GUIDED  **Guided Flow Stage:** POST_AUDIT
+Pre-merge baseline security gate: PASS (synchronous re-call of scan() with same opts; failure pushes to error vector; no concurrency surface). v0.1.0 simplification: rescan re-runs scan from root (per-subtree refresh deferred to v0.2 in spec §9). Speck: `docs/specks/SDD-TASK-001-K-rescan.md`. Implementation: `src/tui.rs::App::rescan`.
 **Created:** 2026-05-06  **Updated:** 2026-05-06
 
 ## Refined Description

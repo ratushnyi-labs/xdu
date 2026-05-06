@@ -80,5 +80,5 @@
 
 ## Pinning
 
-- Base image: `rust:1.85-bookworm`. The toolchain pin lives **in the Docker image tag**, not in a `rust-toolchain.toml` file. Rationale: `rust-toolchain.toml` with `channel = "stable"` causes rustup to fetch whatever the latest stable is when the build runs, defeating the image-tag pin and discarding pre-installed cross-targets. With `rust-toolchain.toml` deleted, builds use the toolchain bundled with the image, deterministically.
+- Base image: **`rust:1.95-bookworm`**. The toolchain pin lives **in the Docker image tag**, not in a `rust-toolchain.toml` file. Rationale: `rust-toolchain.toml` with `channel = "stable"` causes rustup to fetch whatever the latest stable is when the build runs, defeating the image-tag pin and discarding pre-installed cross-targets. With `rust-toolchain.toml` deleted, builds use the toolchain bundled with the image, deterministically. (Bumped from `1.85-bookworm` to `1.95-bookworm` after wave 5: `ratatui` v0.29 transitive deps `darling`/`instability` require rustc ≥ 1.88.)
 - `Cargo.lock` committed — single line of metadata + `xdu` package; deterministic.

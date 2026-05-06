@@ -1,7 +1,8 @@
 # TASK-001-J — Header / footer / help overlay
 
-**Status:** READY  **Type:** TASK  **Parent:** TASK-001
-**User Mode:** GUIDED  **Guided Flow Stage:** PLAN_READY
+**Status:** DONE  **Type:** TASK  **Parent:** TASK-001
+**User Mode:** GUIDED  **Guided Flow Stage:** POST_AUDIT
+Pre-merge baseline security gate: PASS (no I/O; static text; centered modals dismissible by any key). Speck: `docs/specks/SDD-TASK-001-J-help-overlay.md`. Implementation: `src/tui.rs`.
 **Created:** 2026-05-06  **Updated:** 2026-05-06
 
 ## Refined Description
