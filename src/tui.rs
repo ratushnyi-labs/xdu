@@ -3,7 +3,7 @@
 //! module to keep cross-references compact.
 
 use crate::export;
-use crate::format::{bar, format_size, SizeMode};
+use crate::format::{bar, format_size, format_ymd, SizeMode};
 use crate::scanner::{scan, ScanOpts, ScanResult};
 use crate::tree::{NodeId, NodeKind, SortKey};
 use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
@@ -67,8 +67,31 @@ impl App {
         self.scan.tree.children(self.current).count()
     }
 
+    fn can_ascend(&self) -> bool {
+        if !self.back_stack.is_empty() {
+            return true;
+        }
+        let canonical =
+            std::fs::canonicalize(&self.root_path).unwrap_or_else(|_| self.root_path.clone());
+        canonical
+            .parent()
+            .is_some_and(|p| !p.as_os_str().is_empty() && p != canonical.as_path())
+    }
+
+    fn dotdot_offset(&self) -> usize {
+        if self.can_ascend() {
+            1
+        } else {
+            0
+        }
+    }
+
+    fn total_rows(&self) -> usize {
+        self.children_count() + self.dotdot_offset()
+    }
+
     fn move_selection(&mut self, delta: i32) {
-        let n = self.children_count();
+        let n = self.total_rows();
         if n == 0 {
             self.selection = 0;
             return;
@@ -79,8 +102,13 @@ impl App {
     }
 
     fn descend(&mut self) {
+        let offset = self.dotdot_offset();
+        if offset == 1 && self.selection == 0 {
+            self.ascend();
+            return;
+        }
         let kids: Vec<NodeId> = self.scan.tree.children(self.current).collect();
-        let Some(&target) = kids.get(self.selection) else {
+        let Some(&target) = kids.get(self.selection - offset) else {
             return;
         };
         let kind = self.scan.tree.get(target).map(|n| n.kind);
@@ -194,7 +222,7 @@ impl App {
             KeyCode::PageUp => self.move_selection(-10),
             KeyCode::PageDown => self.move_selection(10),
             KeyCode::Home => self.selection = 0,
-            KeyCode::End => self.selection = self.children_count().saturating_sub(1),
+            KeyCode::End => self.selection = self.total_rows().saturating_sub(1),
             KeyCode::Char('s') => self.cycle_sort(),
             KeyCode::Char('?') | KeyCode::F(1) => self.show_help = true,
             KeyCode::Char('!') => self.show_errors = true,
@@ -285,29 +313,108 @@ fn render_body(f: &mut Frame, area: Rect, app: &App) {
     };
     let dir_total = cur.size.max(1);
     let utf8 = is_utf8_terminal();
+    let dotdot = app.dotdot_offset() == 1;
     let height = area.height as usize;
-    let n = kids.len();
-    let start = if n <= height {
+    let total = kids.len() + if dotdot { 1 } else { 0 };
+    let start = if total <= height {
         0
     } else {
-        app.selection.saturating_sub(height / 2).min(n - height)
+        app.selection.saturating_sub(height / 2).min(total - height)
     };
-    let end = (start + height).min(n);
+    let end = (start + height).min(total);
+    let name_w = name_column_width(area.width as usize);
+
     let mut lines: Vec<Line> = Vec::with_capacity(end.saturating_sub(start));
-    for (i, &id) in kids[start..end].iter().enumerate() {
-        let absolute_i = start + i;
-        let Some(node) = tree.get(id) else { continue };
-        let frac = (node.size as f64) / (dir_total as f64);
-        let s = format!(
-            "{}  {:>9}  {}",
-            bar(frac, 10, utf8),
-            format_size(node.size, app.size_mode),
-            display_name(&node.name, node.kind)
-        );
-        let style = row_style(frac, node.kind, node.error, absolute_i == app.selection);
-        lines.push(Line::from(Span::styled(s, style)));
+    for absolute_i in start..end {
+        let line = if dotdot && absolute_i == 0 {
+            render_dotdot_row(name_w, absolute_i == app.selection)
+        } else {
+            let kids_idx = absolute_i - if dotdot { 1 } else { 0 };
+            let Some(&id) = kids.get(kids_idx) else {
+                continue;
+            };
+            let Some(node) = tree.get(id) else { continue };
+            render_entry_row(
+                node,
+                dir_total,
+                name_w,
+                utf8,
+                app.size_mode,
+                absolute_i == app.selection,
+            )
+        };
+        lines.push(line);
     }
     f.render_widget(Paragraph::new(lines), area);
+}
+
+const BAR_W: usize = 10;
+const SIZE_W: usize = 9;
+const DATE_W: usize = 10;
+const SEP_W: usize = 2;
+
+fn name_column_width(area_w: usize) -> usize {
+    // bar + 2sp + size + 2sp + date == 35 cells plus 2sp before bar
+    let fixed = BAR_W + SEP_W + SIZE_W + SEP_W + DATE_W + SEP_W;
+    area_w.saturating_sub(fixed).max(8)
+}
+
+fn render_entry_row(
+    node: &crate::tree::Node,
+    dir_total: u64,
+    name_w: usize,
+    utf8: bool,
+    size_mode: SizeMode,
+    selected: bool,
+) -> Line<'static> {
+    let frac = (node.size as f64) / (dir_total as f64);
+    let name = display_name(&node.name, node.kind);
+    let name_padded = pad_or_truncate(&name, name_w);
+    let s = format!(
+        "{name_padded}  {bar}  {size:>SIZE_W$}  {date}",
+        bar = bar(frac, BAR_W, utf8),
+        size = format_size(node.size, size_mode),
+        date = format_ymd(node.accessed_unix),
+    );
+    let style = row_style(frac, node.kind, node.error, selected);
+    Line::from(Span::styled(s, style))
+}
+
+fn render_dotdot_row(name_w: usize, selected: bool) -> Line<'static> {
+    let name = pad_or_truncate("..", name_w);
+    let s = format!(
+        "{name}  {bar:BAR_W$}  {size:>SIZE_W$}  {date:DATE_W$}",
+        bar = "",
+        size = "",
+        date = "",
+    );
+    let mut style = Style::default().add_modifier(Modifier::BOLD);
+    if selected {
+        style = style.add_modifier(Modifier::REVERSED);
+    }
+    Line::from(Span::styled(s, style))
+}
+
+fn pad_or_truncate(s: &str, width: usize) -> String {
+    let count = s.chars().count();
+    if count == width {
+        return s.to_string();
+    }
+    if count < width {
+        let mut out = String::with_capacity(width);
+        out.push_str(s);
+        for _ in count..width {
+            out.push(' ');
+        }
+        return out;
+    }
+    if width == 0 {
+        return String::new();
+    }
+    let take = width.saturating_sub(1);
+    let mut out: String = s.chars().take(take).collect();
+    out.push('…');
+    out
 }
 
 fn render_footer(f: &mut Frame, area: Rect, app: &App) {
@@ -333,6 +440,7 @@ fn render_help(f: &mut Frame, area: Rect) {
         Line::from("  Down / j        move down"),
         Line::from("  Right/l/Enter   enter directory"),
         Line::from("  Left/h/Bksp     go up (rescans FS parent at scan root)"),
+        Line::from("  ..              row at top of every navigable directory"),
         Line::from("  PgUp / PgDn     page"),
         Line::from("  Home / End      jump"),
         Line::from("  s               cycle sort"),

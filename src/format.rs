@@ -1,7 +1,11 @@
-//! Size formatting and proportion bars.
+//! Size formatting, proportion bars, and date helpers.
 //!
 //! BR-006: default unit is IEC binary (1 KiB = 1024 B); `--si` switches to
 //! decimal (1 KB = 1000 B). Used by UC-003.
+//!
+//! Date helpers (`format_ymd`, `format_iso8601_utc`) share one canonical
+//! `days_to_ymd` implementation so the TUI date column and the JSON exporter
+//! agree on calendar arithmetic.
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum SizeMode {
@@ -84,6 +88,46 @@ pub fn bar(fraction: f64, width: usize, utf8: bool) -> String {
         s.push(' ');
     }
     s
+}
+
+/// `YYYY-MM-DD` for the given Unix-epoch seconds. Returns 10 spaces when
+/// `secs == 0`, used as the "unknown" sentinel by [`crate::tree::Node`].
+pub fn format_ymd(secs: u64) -> String {
+    if secs == 0 {
+        return "          ".to_string();
+    }
+    let days = (secs / 86_400) as i64;
+    let (y, m, d) = days_to_ymd(days);
+    format!("{y:04}-{m:02}-{d:02}")
+}
+
+/// `YYYY-MM-DDTHH:MM:SSZ` (UTC) for the given Unix-epoch seconds.
+pub fn format_iso8601_utc(secs: u64) -> String {
+    let days = (secs / 86_400) as i64;
+    let day_secs = secs % 86_400;
+    let h = day_secs / 3600;
+    let mn = (day_secs % 3600) / 60;
+    let s = day_secs % 60;
+    let (y, mo, d) = days_to_ymd(days);
+    format!("{y:04}-{mo:02}-{d:02}T{h:02}:{mn:02}:{s:02}Z")
+}
+
+fn days_to_ymd(days: i64) -> (i64, u32, u32) {
+    let z = days + 719_468;
+    let era = if z >= 0 {
+        z / 146_097
+    } else {
+        (z - 146_096) / 146_097
+    };
+    let doe = (z - era * 146_097) as u64;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let y = yoe as i64 + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = (doy - (153 * mp + 2) / 5 + 1) as u32;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 } as u32;
+    let y_civil = if m <= 2 { y + 1 } else { y };
+    (y_civil, m, d)
 }
 
 #[cfg(test)]
@@ -219,5 +263,31 @@ mod tests {
     fn sec_uc003_bar_nan_yields_empty() {
         // Defined behavior: NaN treated as 0.0.
         assert_eq!(bar(f64::NAN, 10, true), "          ");
+    }
+
+    #[test]
+    fn format_ymd_zero_returns_blank() {
+        assert_eq!(format_ymd(0), "          ");
+        assert_eq!(format_ymd(0).len(), 10);
+    }
+
+    #[test]
+    fn format_ymd_known_dates() {
+        assert_eq!(format_ymd(1), "1970-01-01");
+        assert_eq!(format_ymd(1_735_689_600), "2025-01-01");
+        assert_eq!(format_ymd(1_767_225_600), "2026-01-01");
+    }
+
+    #[test]
+    fn format_iso8601_known_dates() {
+        assert_eq!(format_iso8601_utc(0), "1970-01-01T00:00:00Z");
+        assert_eq!(format_iso8601_utc(1_735_689_600), "2025-01-01T00:00:00Z");
+        assert_eq!(format_iso8601_utc(1_767_225_600), "2026-01-01T00:00:00Z");
+    }
+
+    #[test]
+    fn sec_format_ymd_no_panic_on_max() {
+        let _ = format_ymd(u64::MAX);
+        let _ = format_iso8601_utc(u64::MAX);
     }
 }

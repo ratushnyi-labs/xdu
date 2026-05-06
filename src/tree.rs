@@ -30,6 +30,11 @@ pub struct Node {
     pub alloc: u64,
     pub entries: u64,
     pub error: bool,
+    /// Unix-epoch seconds of the entry's last access time.
+    /// `0` means "unknown" (e.g., metadata read failed or the FS does not
+    /// expose access time). Aggregation does not propagate this — it is a
+    /// per-entry attribute, displayed only on rows.
+    pub accessed_unix: u64,
     pub parent: Option<NodeId>,
     pub first_child: Option<NodeId>,
     pub next_sibling: Option<NodeId>,
@@ -68,6 +73,7 @@ impl Tree {
             alloc: 0,
             entries: 1,
             error: false,
+            accessed_unix: 0,
             parent: None,
             first_child: None,
             next_sibling: None,
@@ -128,6 +134,7 @@ impl Tree {
             alloc,
             entries: 1,
             error: false,
+            accessed_unix: 0,
             parent: Some(parent),
             first_child: None,
             next_sibling: prev_first,
@@ -139,6 +146,14 @@ impl Tree {
     pub fn mark_error(&mut self, id: NodeId) {
         if let Some(n) = self.nodes.get_mut(id.index()) {
             n.error = true;
+        }
+    }
+
+    /// Set the last-access timestamp (Unix-epoch seconds) on an existing node.
+    /// `0` means unknown. Called by the scanner after [`Self::add_child`].
+    pub fn set_accessed(&mut self, id: NodeId, secs: u64) {
+        if let Some(n) = self.nodes.get_mut(id.index()) {
+            n.accessed_unix = secs;
         }
     }
 
@@ -448,6 +463,27 @@ mod tests {
         assert!(t.get(b).unwrap().error);
         assert!(t.get(a).unwrap().error);
         assert!(t.get(root).unwrap().error);
+    }
+
+    #[test]
+    fn set_accessed_records_timestamp_per_node() {
+        let mut t = Tree::new(NodeKind::Dir, "/");
+        let root = t.root();
+        let a = t.add_child(root, NodeKind::File, "a", 1, 1).unwrap();
+        let b = t.add_child(root, NodeKind::File, "b", 1, 1).unwrap();
+        assert_eq!(t.get(a).unwrap().accessed_unix, 0);
+        t.set_accessed(a, 1_700_000_000);
+        assert_eq!(t.get(a).unwrap().accessed_unix, 1_700_000_000);
+        // Other nodes unaffected.
+        assert_eq!(t.get(b).unwrap().accessed_unix, 0);
+    }
+
+    #[test]
+    fn set_accessed_on_unknown_id_is_no_op() {
+        let mut t = Tree::new(NodeKind::Dir, "/");
+        t.set_accessed(NodeId(99), 1_700_000_000);
+        // No panic; root unaffected.
+        assert_eq!(t.get(t.root()).unwrap().accessed_unix, 0);
     }
 
     #[test]

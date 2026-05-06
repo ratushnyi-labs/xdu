@@ -2,6 +2,7 @@
 //! `serde_json` dependency. Schema `"xdu-export-1"` per `docs/spec.md`
 //! UC-006. Iterative tree walk via explicit `Vec<Frame>` — call-stack-safe.
 
+use crate::format::format_iso8601_utc;
 use crate::scanner::ScanOpts;
 use crate::tree::{NodeId, NodeKind, Tree};
 use std::io::{self, Write};
@@ -162,35 +163,7 @@ fn current_iso8601() -> String {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0);
-    epoch_to_iso8601(secs)
-}
-
-fn epoch_to_iso8601(secs: u64) -> String {
-    let days = secs / 86_400;
-    let day_secs = secs % 86_400;
-    let h = day_secs / 3600;
-    let m = (day_secs % 3600) / 60;
-    let s = day_secs % 60;
-    let (y, mo, d) = days_to_ymd(days as i64);
-    format!("{y:04}-{mo:02}-{d:02}T{h:02}:{m:02}:{s:02}Z")
-}
-
-fn days_to_ymd(days: i64) -> (i64, u32, u32) {
-    let z = days + 719_468;
-    let era = if z >= 0 {
-        z / 146_097
-    } else {
-        (z - 146_096) / 146_097
-    };
-    let doe = (z - era * 146_097) as u64;
-    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
-    let y = yoe as i64 + era * 400;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let d = (doy - (153 * mp + 2) / 5 + 1) as u32;
-    let m = if mp < 10 { mp + 3 } else { mp - 9 } as u32;
-    let y_civil = if m <= 2 { y + 1 } else { y };
-    (y_civil, m, d)
+    format_iso8601_utc(secs)
 }
 
 #[cfg(test)]
@@ -259,14 +232,8 @@ mod tests {
         assert_eq!(s, expected);
     }
 
-    #[test]
-    fn iso8601_format_known_epoch() {
-        assert_eq!(epoch_to_iso8601(0), "1970-01-01T00:00:00Z");
-        // 2025-01-01T00:00:00Z = 1735689600 seconds
-        assert_eq!(epoch_to_iso8601(1_735_689_600), "2025-01-01T00:00:00Z");
-        // 2026-01-01T00:00:00Z = 1767225600 seconds
-        assert_eq!(epoch_to_iso8601(1_767_225_600), "2026-01-01T00:00:00Z");
-    }
+    // `iso8601_format_known_epoch` moved to `crate::format::tests` since the
+    // shared `format_iso8601_utc` helper now lives in `src/format.rs`.
 
     #[test]
     fn sec_uc006_rejects_nul_in_path() {

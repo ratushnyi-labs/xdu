@@ -10,6 +10,7 @@ use std::collections::HashSet;
 use std::fs::Metadata;
 use std::io;
 use std::path::{Path, PathBuf};
+use std::time::UNIX_EPOCH;
 
 #[derive(Clone, Debug)]
 pub struct ScanOpts {
@@ -136,8 +137,10 @@ fn walk_one(
         let kind = classify(&meta);
         let name = entry.file_name().to_string_lossy().into_owned();
         let (size, alloc) = compute_sizes(&meta, kind, hardlinks);
+        let accessed_secs = accessed_unix_secs(&meta);
         match tree.add_child(parent_id, kind, name, size, alloc) {
             Ok(id) => {
+                tree.set_accessed(id, accessed_secs);
                 if matches!(kind, NodeKind::Dir) {
                     stack.push((id, entry_path));
                 }
@@ -174,6 +177,14 @@ fn push_err(errors: &mut Vec<ScanError>, overflow: &mut bool, max: usize, p: &Pa
     } else {
         *overflow = true;
     }
+}
+
+fn accessed_unix_secs(meta: &Metadata) -> u64 {
+    meta.accessed()
+        .ok()
+        .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
 }
 
 fn classify(meta: &Metadata) -> NodeKind {
