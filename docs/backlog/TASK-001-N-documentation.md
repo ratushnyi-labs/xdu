@@ -1,7 +1,8 @@
 # TASK-001-N — Documentation (manuals + final README)
 
-**Status:** READY  **Type:** TASK  **Parent:** TASK-001
-**User Mode:** GUIDED  **Guided Flow Stage:** PLAN_READY
+**Status:** DONE  **Type:** TASK  **Parent:** TASK-001
+**User Mode:** GUIDED  **Guided Flow Stage:** POST_AUDIT
+Pre-merge baseline security gate: PASS (no executable code; Markdown only; stealth identity policy preserved — no agent / model / vendor names in any document). Speck: `docs/specks/SDD-TASK-001-N-documentation.md`. Deliverables: `docs/development-manual.md`, `docs/installation-manual.md`, `docs/configuration-manual.md`, final `README.md`.
 **Created:** 2026-05-06  **Updated:** 2026-05-06
 
 ## Refined Description

@@ -1,7 +1,8 @@
 # TASK-001-M — Test suite (unit + integration + TUI snapshot)
 
-**Status:** READY  **Type:** TASK  **Parent:** TASK-001
-**User Mode:** GUIDED  **Guided Flow Stage:** PLAN_READY
+**Status:** DONE  **Type:** TASK  **Parent:** TASK-001
+**User Mode:** GUIDED  **Guided Flow Stage:** POST_AUDIT
+Pre-merge baseline security gate: PASS. v0.1.0 simplifications (deferred to v0.2): TUI snapshot harness; cargo-llvm-cov coverage measurement (both recorded in spec.md §9). 67 tests pass total: 61 unit + 6 integration. Speck: `docs/specks/SDD-TASK-001-M-test-suite.md`. Implementation: `tests/integration_test.rs` plus per-module `#[cfg(test)] mod tests`.
 **Created:** 2026-05-06  **Updated:** 2026-05-06
 
 ## Refined Description

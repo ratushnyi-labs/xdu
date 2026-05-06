@@ -1,10 +1,10 @@
 # TASK-001 — xdu (Rust disk-usage explorer, ncdu-inspired)
 
-**Status:** DECOMPOSED
+**Status:** DONE
 **Type:** TASK
 **Entry Mode:** IDEA_FIRST (greenfield; functional clone, NOT a §13 migration)
 **User Mode:** GUIDED
-**Guided Flow Stage:** PLAN_READY (sub-tasks A & B DONE; C IN_PROGRESS this turn)
+**Guided Flow Stage:** POST_AUDIT (all 14 leaves DONE; v0.1.0 ready)
 **Initial code-change expectation:** YES
 **Created:** 2026-05-06  **Updated:** 2026-05-06
 
@@ -110,8 +110,8 @@ Each leaf MUST be re-estimated independently and reach `ABOVE_EASY` or `EASY` be
 | TASK-001-J          | Header + footer + help overlay (FE)              | FRONTEND | EASY     | H             | DONE          |
 | TASK-001-K          | Refresh / rescan flow                            | INTEG    | EASY     | E, I          | DONE          |
 | TASK-001-L          | JSON export                                      | BACKEND  | EASY     | F             | DONE          |
-| TASK-001-M          | Test suite (unit + integration + TUI snapshot)   | TEST     | ABOVE_EASY| E, F, G, H, I | READY         |
-| TASK-001-N          | Documentation (manuals + README final)           | DOC      | EASY     | all of E–L    | READY         |
+| TASK-001-M          | Test suite (unit + integration + TUI snapshot)   | TEST     | ABOVE_EASY| E, F, G, H, I | DONE          |
+| TASK-001-N          | Documentation (manuals + README final)           | DOC      | EASY     | all of E–L    | DONE          |
 
 **Execution order (waves):**
 1. A, B (this turn, partial)
@@ -128,8 +128,38 @@ Each leaf MUST be re-estimated independently and reach `ABOVE_EASY` or `EASY` be
 `docs/specks/SDD-TASK-001-xdu.md` (parent) plus per-leaf Specks where the leaf changes
 behavior. To be authored at `PLAN_READY`.
 
-## Open Items For User
+## v0.1.0 — Final disposition
 
-- Confirm decomposition order above (or request changes).
-- Confirm v0.1.0 scope boundary (anything else considered MUST-have for v0.1.0?).
-- Anything in §Resolved Assumptions you want to override?
+All 14 sub-tasks `DONE`. v0.1.0 shipped as 14 commits on `main`:
+
+| # | Commit  | Leaf | What landed |
+|---|---------|------|-------------|
+| 1 | `0d59885` | C-prep | repo scaffold + spec + ADR + sub-task backlog |
+| 2 | `6308de7` | C | TASK-001-C pre-merge baseline security gate record |
+| 3 | `d1a905f` | D | Docker build pipeline (multi-stage, multi-target, size-enforced) |
+| 4 | `8660dd1` | G | size formatter + bar generator |
+| 5 | `f12048b` | F | tree model (arena + sort + iterative aggregate) |
+| 6 | `52a4571` | E | filesystem scanner + spec amendments |
+| 7 | `f0b1bc7` | H/I/J/K | TUI suite (runtime, tree view, overlays, rescan) |
+| 8 | `f3256ef` | L | JSON export |
+| 9 | _final_ | M+N | integration tests + manuals + final README |
+
+### Final binary sizes (release-min, stripped)
+
+| Target                            | Size       | File                                      |
+|-----------------------------------|------------|-------------------------------------------|
+| x86_64-unknown-linux-musl         | 687 KiB    | `out/x86_64-unknown-linux-musl/xdu`       |
+| aarch64-unknown-linux-musl        | 619 KiB    | `out/aarch64-unknown-linux-musl/xdu`      |
+| x86_64-pc-windows-gnu             | 476 KiB    | `out/x86_64-pc-windows-gnu/xdu.exe`       |
+
+All within ADR-001 §5 budgets (target < 1.0 MiB, ceiling 1.5 MiB).
+
+### Test totals
+67 tests pass: 61 unit (format / tree / scanner / export / tui) + 6 integration.
+`cargo fmt --check`, `cargo clippy --locked -- -D warnings`, `cargo test --locked`: clean.
+
+### Pre-merge baseline security gate (parent rollup)
+All 14 leaves recorded `PASS` for `SECURITY_AUDIT`, `DEPENDENCY_TREE_SECURITY_AUDIT`, `MEMORY_LEAK_AUDIT`. Continuity check: zero silent de-scope; deferrals (Windows hardlink/cross-fs, `--exclude` flag, TUI snapshot harness, macOS targets, coverage measurement) are explicitly recorded in `docs/spec.md` §9 with assigned v0.2 follow-up IDs (`LATER-001` … `LATER-006`).
+
+### Stealth identity (§5.4)
+No agent / model / vendor attribution in any source, test, doc, or commit message.

@@ -17,6 +17,11 @@ oversize=""
 
 for t in $TARGETS; do
     printf '\n==> Building %s\n' "$t"
+    if ! TARGET="$t" docker compose build build >/dev/null 2>&1; then
+        printf '    [error] image build failed for %s\n' "$t"
+        failed="$failed $t"
+        continue
+    fi
     if ! TARGET="$t" docker compose run --rm build; then
         failed="$failed $t"
         continue
