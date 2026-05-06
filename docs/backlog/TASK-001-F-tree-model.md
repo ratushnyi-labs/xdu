@@ -1,7 +1,7 @@
 # TASK-001-F — Tree model
 
-**Status:** READY  **Type:** TASK  **Parent:** TASK-001
-**User Mode:** GUIDED  **Guided Flow Stage:** PLAN_READY
+**Status:** DONE  **Type:** TASK  **Parent:** TASK-001
+**User Mode:** GUIDED  **Guided Flow Stage:** POST_AUDIT
 **Created:** 2026-05-06  **Updated:** 2026-05-06
 
 ## Refined Description
@@ -28,4 +28,25 @@
 - SEC-2: rejects insertion past `NodeId::MAX` with explicit error (no panic).
 
 ## Speck Reference
-`docs/specks/SDD-TASK-001-F-tree-model.md` (to be authored).
+[`docs/specks/SDD-TASK-001-F-tree-model.md`](../specks/SDD-TASK-001-F-tree-model.md)
+
+## Verified results
+
+- 18 unit tests pass: 14 functional + 4 `[SEC]`.
+- Deep-chain test exercises 100 000-level depth without call-stack overflow.
+- Saturating overflow test exercises `u64::MAX` aggregation with `size_overflow()` latch.
+- `cargo fmt --check` clean. `cargo clippy --locked -D warnings` clean.
+- No `unsafe`, no I/O.
+
+## Pre-merge baseline security gate (§9.4)
+
+| Audit                          | Depth     | Disposition | Rationale                                                                |
+|--------------------------------|-----------|-------------|--------------------------------------------------------------------------|
+| SECURITY_AUDIT                 | NORMAL    | PASS        | Pure data structure; no `unsafe`; no I/O; invalid IDs return `Option::None` (SEC-3 verified by test); arena cap rejection prevents `OutOfCapacity` panics (SEC-2 verified by code path inspection). |
+| DEPENDENCY_TREE_SECURITY_AUDIT | FAST      | PASS        | No new crate dependencies (per ADR §7).                                  |
+| MEMORY_LEAK_AUDIT              | FAST      | PASS        | Only allocations are `Vec<Node>` and per-call sort/path scratch vectors. No retained globals, no listener accumulation, no thread spawning. Aggregation stack size proportional to depth (SEC-4). |
+
+Findings: none. Continuity: AC-2 partially asserted (cannot allocate 4 G nodes in unit test;
+the `len() >= u32::MAX` branch was reviewed by code inspection — no follow-up required).
+
+Status: **DONE**.

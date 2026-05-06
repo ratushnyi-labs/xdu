@@ -4,3 +4,4 @@
 //! TUI, and export. The binary in `src/main.rs` wires them together.
 
 pub mod format;
+pub mod tree;
