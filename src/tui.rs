@@ -299,6 +299,10 @@ impl App {
             self.status = Some("delete: refusing to remove the scan root".into());
             return;
         }
+        // Capture the canonical absolute path BEFORE the delete; canonicalize
+        // would fail post-delete. Showing the canonical path in the status
+        // makes path-resolution surprises visible (BUG-003).
+        let canonical = std::fs::canonicalize(&path).unwrap_or_else(|_| path.clone());
         let result = if path.is_dir() {
             std::fs::remove_dir_all(&path)
         } else {
@@ -306,12 +310,25 @@ impl App {
         };
         let msg = match result {
             Ok(_) => {
-                let m = format!("deleted {}", path.display());
-                let root = self.root_path.clone();
-                let _ = self.spawn_scan(root);
-                m
+                // Defensive read-back (BUG-003): on Windows the syscall can
+                // return success while the entry persists (delete-on-close),
+                // and a path-resolution mismatch can also produce a phantom
+                // "Ok". If the entry is still on disk after Ok, surface a
+                // warning instead of declaring success and skip the rescan
+                // so the user can inspect the unchanged tree.
+                if path.exists() {
+                    format!(
+                        "delete reported success but {} is still on disk — try `r` to refresh",
+                        canonical.display()
+                    )
+                } else {
+                    let m = format!("deleted {}", canonical.display());
+                    let root = self.root_path.clone();
+                    let _ = self.spawn_scan(root);
+                    m
+                }
             }
-            Err(e) => format_delete_error(&path, &e),
+            Err(e) => format_delete_error(&canonical, &e),
         };
         self.status = Some(msg);
     }
@@ -1068,6 +1085,33 @@ mod tests {
         app.handle_key(KeyCode::Enter, KeyModifiers::NONE);
         assert!(app.confirm_prompt.is_none());
         assert!(!target.exists(), "file must be deleted after Yes+Enter");
+
+        let _ = std::fs::remove_dir_all(&td_path);
+    }
+
+    #[test]
+    fn bug003_status_reports_canonical_path_on_success() {
+        let td_path = unique_temp("del-canon");
+        std::fs::create_dir_all(&td_path).unwrap();
+        let target = td_path.join("zap.txt");
+        std::fs::write(&target, b"x").unwrap();
+        let canonical = std::fs::canonicalize(&target).unwrap_or(target.clone());
+
+        let opts = ScanOpts::default();
+        let h = handle_from_sync(td_path.clone(), opts.clone());
+        let mut app = App::new(td_path.clone(), opts, h, SizeMode::Iec);
+        app.selection = if app.dotdot_offset() == 1 { 1 } else { 0 };
+        app.start_delete_prompt();
+        app.handle_key(KeyCode::Tab, KeyModifiers::NONE);
+        app.handle_key(KeyCode::Enter, KeyModifiers::NONE);
+        assert!(!target.exists(), "file must be gone");
+        let s = app.status.as_deref().unwrap_or_default();
+        assert!(s.contains("deleted"), "got: {s}");
+        // Status must show canonical path (or at least the file's basename).
+        assert!(
+            s.contains(&canonical.display().to_string()) || s.contains("zap.txt"),
+            "status missing canonical path: {s}"
+        );
 
         let _ = std::fs::remove_dir_all(&td_path);
     }
