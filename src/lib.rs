@@ -3,6 +3,7 @@
 //! Library entry point. Modules implement scanner, tree model, formatting,
 //! TUI, and export. The binary in `src/main.rs` wires them together.
 
+pub mod disk_space;
 pub mod export;
 pub mod format;
 pub mod scanner;

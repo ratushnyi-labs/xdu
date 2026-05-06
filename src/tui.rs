@@ -7,6 +7,7 @@
 //! touches the tree locks the mutex briefly. Cells whose value is not yet
 //! finalized render an animated spinner.
 
+use crate::disk_space;
 use crate::export;
 use crate::format::{bar, format_size, format_ymd, SizeMode};
 use crate::scanner::{scan_async, ScanError, ScanHandle, ScanOpts, ScanResult};
@@ -466,7 +467,7 @@ fn pad_or_truncate(s: &str, width: usize) -> String {
 }
 
 fn render_footer(f: &mut Frame, area: Rect, app: &App, state: &ScanResult) {
-    let s = if let Some(msg) = app.status.as_deref() {
+    let left = if let Some(msg) = app.status.as_deref() {
         format!(" {msg}  (any key to dismiss) ")
     } else if state.running {
         format!(
@@ -477,14 +478,36 @@ fn render_footer(f: &mut Frame, area: Rect, app: &App, state: &ScanResult) {
         )
     } else {
         format!(
-            " sort:{}  errors:{}  ?:help  s:sort  u:unit  r:rescan  e:export  !:errors  q:quit ",
+            " sort:{}  errors:{}  ?:help  s:sort  u:unit  r:rescan  e:export  d:delete  !:errors  q:quit ",
             sort_label(app.sort),
             state.errors.len()
         )
     };
-    let s = truncate_left(&s, area.width as usize);
+    let right = disk_space::format_free(&app.root_path, app.size_mode);
+    let s = compose_footer(&left, &right, area.width as usize);
     let style = Style::default().add_modifier(Modifier::REVERSED);
     f.render_widget(Paragraph::new(s).style(style), area);
+}
+
+fn compose_footer(left: &str, right: &str, width: usize) -> String {
+    if width == 0 {
+        return String::new();
+    }
+    let lc = left.chars().count();
+    let rc = right.chars().count();
+    if rc == 0 {
+        return truncate_left(left, width);
+    }
+    if lc + rc <= width {
+        let pad = width - lc - rc;
+        return format!("{left}{}{right}", " ".repeat(pad));
+    }
+    if rc < width {
+        let take = width.saturating_sub(rc + 1);
+        let left_truncated: String = left.chars().take(take).collect();
+        return format!("{left_truncated} {right}");
+    }
+    truncate_left(right, width)
 }
 
 fn render_help(f: &mut Frame, area: Rect) {

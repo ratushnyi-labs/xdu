@@ -44,7 +44,7 @@ for the chosen baseline and rejected alternatives.
 
 | ID      | Rule                                                                             |
 |---------|----------------------------------------------------------------------------------|
-| BR-001  | All file-system operations MUST be read-only. No `unlink`, `rename`, `chmod`, `truncate`, or any equivalent on any platform, ever, under any code path. |
+| BR-001  | xdu defaults to read-only. **Deletion** of files and directories (recursive) is exposed only behind the explicit `d` keybinding plus a confirmation modal whose default focus is `[ No ]` (TASK-005, v0.1.1). No `rename`, `chmod`, or `truncate` on any platform under any code path. The export feature continues to write only the export file (`xdu-export.json`), never to the scanned tree. The scan root itself cannot be deleted. |
 | BR-002  | Hardlinks MUST be counted once per `(device, inode)` pair on Unix. The first traversal records the size; subsequent encounters add only a logical reference, never re-add allocated bytes. **v0.1.0 limitation:** on Windows hardlink deduplication is OFF (each NTFS hardlink contributes its size separately). See §9 Known limitations. |
 | BR-003  | Scans MUST NOT cross filesystem mount/volume boundaries by default on Unix (`Metadata::dev()` check). An explicit `--cross-fs` flag opts in. **v0.1.0 limitation:** on Windows `--cross-fs` is a no-op (volume detection deferred). Because BR-004 forbids following symlinks/junction points, most Windows cross-volume traversal does not occur in practice. See §9 Known limitations. |
 | BR-004  | Symbolic links MUST NOT be followed by default. They are recorded as their own size (link target string length on Unix; reparse-point size on Windows), never their target. An explicit `--follow-symlinks` flag may be added in a later version (OUT for v0.1.0). |
@@ -404,6 +404,35 @@ flowchart TD
 
 ---
 
+### UC-008 — Delete file/directory with confirmation
+
+**Summary:** the user removes the selected entry from the filesystem after a
+confirmation prompt.
+
+**Description:** with a real entry selected (not `..`), pressing `d` opens a centered
+modal showing the absolute path, the kind (file / directory — directories are removed
+recursively), and `[ Yes ]  [ No ]` buttons with **default focus on `[ No ]`**. `Tab` /
+arrows / `h` / `l` toggle focus. `Enter` activates the focused button. `y` is a
+quick-confirm. `n` / `Esc` / `q` cancel the modal (without quitting xdu). After a
+successful delete, the status bar reports the action and `xdu` triggers an asynchronous
+rescan of the current root so totals refresh. The scan root itself cannot be deleted.
+When the OS reports the file as in use (Windows error codes 5/32/33), the status
+message guides the user to identify and close the holding handle with Sysinternals
+**Process Explorer** or **Resource Monitor** and try again.
+
+**Related BR/WF:** BR-001 (amended), BR-005.
+
+#### Failure Modes
+- target is `..` row — status `cannot delete '..'`, modal not shown.
+- target equals scan root — status `delete: refusing to remove the scan root`, no FS call.
+- file in use (Windows ERROR_SHARING_VIOLATION / LOCK_VIOLATION / ACCESS_DENIED) — status with actionable hint.
+- other I/O error — status reports the OS error verbatim.
+
+#### Schematic layouts
+- `docs/ui-schematics/UC-008/01-confirm-modal.txt` (deferred to v0.2)
+
+---
+
 ### UC-007 — Help overlay
 
 **Summary:** show an in-app help screen listing all keybindings.
@@ -435,6 +464,18 @@ flowchart LR
 
 #### Baseline screenshots
 - `docs/ui-baselines/UC-007/01-help.txt`
+
+---
+
+### Footer right-edge: free-space indicator (TASK-004, UC-002 / UC-007)
+
+The footer's right edge displays ` free: <size> (<pct>%) ` for the volume containing
+the scan root, derived from `disk_space::free_and_total(root_path)`. The percent is
+free-of-total rounded to a whole number; size respects the active `SizeMode`. When the
+syscall fails or the platform is unsupported (macOS / BSD in v0.1.x — `LATER-005`-class),
+the right segment is empty. When the scan is running, the existing `scanning … <spinner>`
+indicator and the free-space block render simultaneously (left + right). When the
+terminal is too narrow, the free-space block is preserved and the left side is truncated.
 
 ---
 
