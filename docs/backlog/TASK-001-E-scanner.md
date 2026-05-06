@@ -1,7 +1,7 @@
 # TASK-001-E — Scanner module
 
-**Status:** READY  **Type:** TASK  **Parent:** TASK-001
-**User Mode:** GUIDED  **Guided Flow Stage:** PLAN_READY
+**Status:** DONE  **Type:** TASK  **Parent:** TASK-001
+**User Mode:** GUIDED  **Guided Flow Stage:** POST_AUDIT
 **Created:** 2026-05-06  **Updated:** 2026-05-06
 
 ## Raw Request
@@ -40,4 +40,20 @@
 - SEC-4: stack-safe traversal — iterative, not recursive call-stack — handles trees ≥ 50 000 deep.
 
 ## Speck Reference
-`docs/specks/SDD-TASK-001-E-scanner.md` (to be authored).
+[`docs/specks/SDD-TASK-001-E-scanner.md`](../specks/SDD-TASK-001-E-scanner.md)
+
+## Verified results
+
+- 9 unit tests pass (5 functional + 1 perm-denied + 1 symlink + 1 hardlink dedup + 1 [SEC]).
+- Spec amended (BR-002/BR-003 + new §9 Known limitations) before code change per §3.5.
+- `cargo fmt --check` / `cargo clippy --locked -D warnings` / `cargo test --locked`: all clean.
+
+## Pre-merge baseline security gate (§9.4)
+
+| Audit                          | Depth     | Disposition | Rationale                                                                |
+|--------------------------------|-----------|-------------|--------------------------------------------------------------------------|
+| SECURITY_AUDIT                 | NORMAL    | PASS        | NUL-byte rejection at entry; iterative DFS (no stack-overflow risk); no subprocess spawning (`grep -nE 'Command::new'` empty); no `unsafe`; metadata-only — no content reads; bounded errors via `max_errors`. |
+| DEPENDENCY_TREE_SECURITY_AUDIT | FAST      | PASS        | No new crate dependencies.                                               |
+| MEMORY_LEAK_AUDIT              | FAST      | PASS        | All resources are stack-scoped (`Vec` stack, `HashSet`, `Vec<ScanError>`); freed on `scan` return / drop. No background threads, no listeners, no global state. |
+
+Status: **DONE**.

@@ -45,8 +45,8 @@ for the chosen baseline and rejected alternatives.
 | ID      | Rule                                                                             |
 |---------|----------------------------------------------------------------------------------|
 | BR-001  | All file-system operations MUST be read-only. No `unlink`, `rename`, `chmod`, `truncate`, or any equivalent on any platform, ever, under any code path. |
-| BR-002  | Hardlinks MUST be counted once per `(device, inode)` pair on Unix; per `(VolumeSerial, FileIndex)` on Windows. The first traversal records the size; subsequent encounters add only a logical reference, never re-add allocated bytes. |
-| BR-003  | Scans MUST NOT cross filesystem mount/volume boundaries by default. An explicit `--cross-fs` flag opts in. |
+| BR-002  | Hardlinks MUST be counted once per `(device, inode)` pair on Unix. The first traversal records the size; subsequent encounters add only a logical reference, never re-add allocated bytes. **v0.1.0 limitation:** on Windows hardlink deduplication is OFF (each NTFS hardlink contributes its size separately). See §9 Known limitations. |
+| BR-003  | Scans MUST NOT cross filesystem mount/volume boundaries by default on Unix (`Metadata::dev()` check). An explicit `--cross-fs` flag opts in. **v0.1.0 limitation:** on Windows `--cross-fs` is a no-op (volume detection deferred). Because BR-004 forbids following symlinks/junction points, most Windows cross-volume traversal does not occur in practice. See §9 Known limitations. |
 | BR-004  | Symbolic links MUST NOT be followed by default. They are recorded as their own size (link target string length on Unix; reparse-point size on Windows), never their target. An explicit `--follow-symlinks` flag may be added in a later version (OUT for v0.1.0). |
 | BR-005  | Per-entry I/O errors (permission denied, I/O error, broken link) MUST NOT abort the scan. They MUST be recorded and surfaced in the UI as an error count and an inspectable error log. |
 | BR-006  | Default size unit is **IEC binary** (1 KiB = 1024 B). A `--si` flag switches to decimal (1 KB = 1000 B). |
@@ -447,7 +447,21 @@ For TUI rendering — not full §4.1.3 web-style tokens. Recorded in
 
 Color paths: truecolor → 256-color → 16-color → no-color. `NO_COLOR` env var honored.
 
-## 8. Inventory references
+## 9. Known limitations (v0.1.0)
+
+These are tracked as v0.2 follow-up tasks and are documented in this section so users
+do not encounter them as surprises.
+
+| Limitation                                          | Impact                                                                                       | Follow-up      |
+|-----------------------------------------------------|----------------------------------------------------------------------------------------------|----------------|
+| Windows: no hardlink deduplication (BR-002)         | Each NTFS hardlink counts toward total size separately. Rare in user data; common in some build trees. | v0.2 / `LATER-001` |
+| Windows: `--cross-fs` is a no-op (BR-003)           | The scan stays on whatever volume is reached via plain `read_dir`. Reparse points / mountvol mounts are not detected. BR-004 (no symlink follow) provides partial mitigation. | v0.2 / `LATER-002` |
+| `--exclude <glob>` flag deferred (UC-001)           | v0.1.0 scans the full subtree; users cannot exclude `node_modules/` or similar before scan.  | v0.2 / `LATER-003` |
+| TUI snapshot test harness deferred (M / §13.3.4)    | UI baselines stored as paths in this spec are NOT validated automatically in v0.1.0. Visual inspection at release. | v0.2 / `LATER-004` |
+| macOS targets not built by default                  | Built only when `osxcross` SDK is present. Users on macOS build from source via host toolchain. | v0.2 / `LATER-005` |
+| Coverage measurement not wired (M / §7.1)           | 100% line/branch/function coverage is enforced by writing tests for every function; not measured by `cargo-llvm-cov`. | v0.2 / `LATER-006` |
+
+## 10. Inventory references
 
 - `docs/architecture/ADR-001-baseline-architecture.md` — chosen architecture and rationale.
 - `docs/backlog/TASK-001-ncdu-clone-rust.md` — parent backlog item.
