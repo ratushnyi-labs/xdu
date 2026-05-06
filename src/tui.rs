@@ -10,6 +10,7 @@
 use crate::disk_space;
 use crate::export;
 use crate::format::{bar, format_size, format_ymd, SizeMode};
+use crate::lock_detect::{self, LockHolder};
 use crate::scanner::{scan_async, ScanError, ScanHandle, ScanOpts, ScanResult};
 use crate::tree::{Node, NodeId, NodeKind, SortKey};
 use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
@@ -49,6 +50,9 @@ pub struct App {
     /// `Some`, all keystrokes route through `handle_prompt_key`. Default focus
     /// on a fresh prompt is `[ No ]` (`yes_focused = false`) per BR-001 amend.
     confirm_prompt: Option<ConfirmPrompt>,
+    /// Active "file is locked" modal (BUG-004). Shown after a delete fails
+    /// because another process holds the file open. Default focus on `[ Retry ]`.
+    lock_prompt: Option<LockPrompt>,
     quit: bool,
 }
 
@@ -57,6 +61,14 @@ pub struct ConfirmPrompt {
     target: NodeId,
     message: String,
     yes_focused: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct LockPrompt {
+    target: NodeId,
+    path: PathBuf,
+    holders: Vec<LockHolder>,
+    retry_focused: bool,
 }
 
 impl App {
@@ -81,6 +93,7 @@ impl App {
             size_mode,
             status: None,
             confirm_prompt: None,
+            lock_prompt: None,
             quit: false,
         };
         s.sort_current();
@@ -299,38 +312,55 @@ impl App {
             self.status = Some("delete: refusing to remove the scan root".into());
             return;
         }
-        // Capture the canonical absolute path BEFORE the delete; canonicalize
-        // would fail post-delete. Showing the canonical path in the status
-        // makes path-resolution surprises visible (BUG-003).
         let canonical = std::fs::canonicalize(&path).unwrap_or_else(|_| path.clone());
         let result = if path.is_dir() {
             std::fs::remove_dir_all(&path)
         } else {
             std::fs::remove_file(&path)
         };
-        let msg = match result {
+        match result {
             Ok(_) => {
-                // Defensive read-back (BUG-003): on Windows the syscall can
-                // return success while the entry persists (delete-on-close),
-                // and a path-resolution mismatch can also produce a phantom
-                // "Ok". If the entry is still on disk after Ok, surface a
-                // warning instead of declaring success and skip the rescan
-                // so the user can inspect the unchanged tree.
                 if path.exists() {
-                    format!(
-                        "delete reported success but {} is still on disk — try `r` to refresh",
-                        canonical.display()
-                    )
+                    // BUG-003 defensive read-back caught the failed delete.
+                    // BUG-004: try to identify the holding process.
+                    if !self.try_open_lock_prompt(node_id, canonical.clone()) {
+                        self.status = Some(format!(
+                            "delete reported success but {} is still on disk — try `r` to refresh",
+                            canonical.display()
+                        ));
+                    }
                 } else {
                     let m = format!("deleted {}", canonical.display());
                     let root = self.root_path.clone();
                     let _ = self.spawn_scan(root);
-                    m
+                    self.status = Some(m);
                 }
             }
-            Err(e) => format_delete_error(&canonical, &e),
-        };
-        self.status = Some(msg);
+            Err(e) => {
+                // BUG-004: when the OS reports the file is in use, try to
+                // identify the holding processes and offer a Retry modal.
+                let raw = e.raw_os_error().unwrap_or(0);
+                let is_in_use = matches!(raw, 5 | 32 | 33);
+                if is_in_use && self.try_open_lock_prompt(node_id, canonical.clone()) {
+                    return;
+                }
+                self.status = Some(format_delete_error(&canonical, &e));
+            }
+        }
+    }
+
+    fn try_open_lock_prompt(&mut self, target: NodeId, path: PathBuf) -> bool {
+        let holders = lock_detect::holders(&path);
+        if holders.is_empty() {
+            return false;
+        }
+        self.lock_prompt = Some(LockPrompt {
+            target,
+            path,
+            holders,
+            retry_focused: true,
+        });
+        true
     }
 
     fn export(&mut self) {
@@ -385,6 +415,10 @@ impl App {
     }
 
     fn handle_prompt_key(&mut self, key: KeyCode) -> bool {
+        if self.lock_prompt.is_some() {
+            self.handle_lock_prompt_key(key);
+            return true;
+        }
         let Some(prompt) = self.confirm_prompt.as_mut() else {
             return false;
         };
@@ -415,6 +449,41 @@ impl App {
             _ => {}
         }
         true
+    }
+
+    fn handle_lock_prompt_key(&mut self, key: KeyCode) {
+        let Some(prompt) = self.lock_prompt.as_mut() else {
+            return;
+        };
+        match key {
+            KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('n') | KeyCode::Char('N') => {
+                self.lock_prompt = None;
+                self.status = Some("delete cancelled while file was in use".into());
+            }
+            KeyCode::Char('r') | KeyCode::Char('R') => {
+                let target = prompt.target;
+                self.lock_prompt = None;
+                self.perform_delete(target);
+            }
+            KeyCode::Tab
+            | KeyCode::Left
+            | KeyCode::Right
+            | KeyCode::Char('h')
+            | KeyCode::Char('l') => {
+                prompt.retry_focused = !prompt.retry_focused;
+            }
+            KeyCode::Enter => {
+                let retry = prompt.retry_focused;
+                let target = prompt.target;
+                self.lock_prompt = None;
+                if retry {
+                    self.perform_delete(target);
+                } else {
+                    self.status = Some("delete cancelled while file was in use".into());
+                }
+            }
+            _ => {}
+        }
     }
 }
 
@@ -496,6 +565,69 @@ fn render(f: &mut Frame, app: &App) {
     if let Some(prompt) = app.confirm_prompt.as_ref() {
         render_confirm(f, area, prompt);
     }
+    if let Some(prompt) = app.lock_prompt.as_ref() {
+        render_lock_prompt(f, area, prompt);
+    }
+}
+
+fn render_lock_prompt(f: &mut Frame, area: Rect, prompt: &LockPrompt) {
+    let mut lines: Vec<Line> = Vec::new();
+    lines.push(Line::from(format!(
+        "Cannot delete {} — it is held open by {} process(es):",
+        prompt.path.display(),
+        prompt.holders.len()
+    )));
+    lines.push(Line::from(""));
+    for h in prompt.holders.iter().take(8) {
+        lines.push(Line::from(format!("    {} — {}", h.pid, h.name)));
+    }
+    if prompt.holders.len() > 8 {
+        lines.push(Line::from(format!(
+            "    … and {} more",
+            prompt.holders.len() - 8
+        )));
+    }
+    lines.push(Line::from(""));
+    lines.push(Line::from(
+        "Close the listed apps in your task manager (xdu does not terminate processes for you), then press Retry.",
+    ));
+    lines.push(Line::from(""));
+    lines.push(retry_buttons_line(prompt.retry_focused));
+    lines.push(Line::from(""));
+    lines.push(Line::from(
+        "Tab/Left/Right: toggle    Enter: activate    r: retry    n / Esc / q: cancel",
+    ));
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(" File is in use ");
+    let h = (lines.len() as u16 + 2).min(area.height);
+    let r = centered_rect(area, 96, h);
+    f.render_widget(Clear, r);
+    f.render_widget(Paragraph::new(lines).block(block), r);
+}
+
+fn retry_buttons_line(retry_focused: bool) -> Line<'static> {
+    let retry_style = if retry_focused {
+        Style::default()
+            .add_modifier(Modifier::REVERSED)
+            .fg(Color::Yellow)
+    } else {
+        Style::default().fg(Color::DarkGray)
+    };
+    let cancel_style = if !retry_focused {
+        Style::default()
+            .add_modifier(Modifier::REVERSED)
+            .fg(Color::White)
+    } else {
+        Style::default().fg(Color::DarkGray)
+    };
+    Line::from(vec![
+        Span::raw("    "),
+        Span::styled(" Retry ", retry_style),
+        Span::raw("        "),
+        Span::styled(" Cancel ", cancel_style),
+        Span::raw("    "),
+    ])
 }
 
 fn render_confirm(f: &mut Frame, area: Rect, prompt: &ConfirmPrompt) {
