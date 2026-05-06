@@ -1,7 +1,7 @@
 # TASK-001-C — Repo scaffold
 
-**Status:** IN PROGRESS  **Type:** TASK  **Parent:** TASK-001
-**User Mode:** GUIDED  **Guided Flow Stage:** BUILD
+**Status:** MERGED  **Type:** TASK  **Parent:** TASK-001
+**User Mode:** GUIDED  **Guided Flow Stage:** VERIFY (build pipeline pending in TASK-001-D will verify AC-1/AC-5)
 **Created:** 2026-05-06  **Updated:** 2026-05-06
 
 ## Raw Request
@@ -43,3 +43,18 @@ skeleton, `.editorconfig`, `git init` + initial commit.
 
 ## Speck Reference
 [`docs/specks/SDD-TASK-001-C-repo-scaffold.md`](../specks/SDD-TASK-001-C-repo-scaffold.md)
+
+## Pre-merge baseline security gate (§9.4)
+
+| Audit                              | Depth       | Disposition | Rationale                                                                 |
+|------------------------------------|-------------|-------------|---------------------------------------------------------------------------|
+| SECURITY_AUDIT                     | FAST_SCAN   | PASS        | Only behavior is `println!` of `CARGO_PKG_VERSION`. No I/O, no parsing, no network, no FS read/write, no `unsafe`. Zero attack surface. |
+| DEPENDENCY_TREE_SECURITY_AUDIT     | FAST_SCAN   | PASS        | `[dependencies]` is empty — no third-party code linked.                   |
+| MEMORY_LEAK_AUDIT                  | FAST_SCAN   | PASS        | Single `println!`; no heap allocations beyond `format!` in `println!` (released at process exit). No long-running loops, no listeners, no resources held. |
+
+Findings: none. No fix sub-tasks created. Continuity check across parent TASK-001: scope delivered matches Speck ACs 1–9 exactly; no de-scope. Stage gate PASS unblocks `MERGED`.
+
+## Final
+
+Merged at commit `0d59885` (root commit, branch `main`). Status held at `MERGED` until
+TASK-001-D's pipeline verifies AC-1/AC-5 at runtime; on first green build, advance to `DONE`.
