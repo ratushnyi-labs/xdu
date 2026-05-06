@@ -104,7 +104,7 @@ Each leaf MUST be re-estimated independently and reach `ABOVE_EASY` or `EASY` be
 | TASK-001-D          | Docker build pipeline (multi-stage, multi-target)| INFRA    | ABOVE_EASY| C            | DONE          |
 | TASK-001-E          | Scanner module (BE)                              | BACKEND  | ABOVE_EASY| C            | READY         |
 | TASK-001-F          | Tree model (BE)                                  | BACKEND  | ABOVE_EASY| C            | READY         |
-| TASK-001-G          | Size formatter + bar (BE)                        | BACKEND  | EASY     | C             | READY         |
+| TASK-001-G          | Size formatter + bar (BE)                        | BACKEND  | EASY     | C             | DONE          |
 | TASK-001-H          | TUI runtime (FE)                                 | FRONTEND | ABOVE_EASY| C            | READY         |
 | TASK-001-I          | Tree view widget (FE)                            | FRONTEND | ABOVE_EASY| F, G, H       | READY         |
 | TASK-001-J          | Header + footer + help overlay (FE)              | FRONTEND | EASY     | H             | READY         |

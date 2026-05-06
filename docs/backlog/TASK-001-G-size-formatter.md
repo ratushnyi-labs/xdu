@@ -1,7 +1,7 @@
 # TASK-001-G — Size formatter + bar generator
 
-**Status:** READY  **Type:** TASK  **Parent:** TASK-001
-**User Mode:** GUIDED  **Guided Flow Stage:** PLAN_READY
+**Status:** DONE  **Type:** TASK  **Parent:** TASK-001
+**User Mode:** GUIDED  **Guided Flow Stage:** POST_AUDIT
 **Created:** 2026-05-06  **Updated:** 2026-05-06
 
 ## Refined Description
@@ -27,4 +27,23 @@
 - SEC-1: width clamped to `[0, 256]`; fraction clamped to `[0.0, 1.0]`.
 
 ## Speck Reference
-`docs/specks/SDD-TASK-001-G-size-formatter.md` (to be authored).
+[`docs/specks/SDD-TASK-001-G-size-formatter.md`](../specks/SDD-TASK-001-G-size-formatter.md)
+
+## Verified results
+
+- 21 unit tests pass: 18 functional + 3 `[SEC]` (NaN handling, u64::MAX no-panic, extreme width clamp).
+- `cargo fmt --check` clean.
+- `cargo clippy --all-targets --all-features --locked -- -D warnings` clean.
+- No `unsafe`, no I/O, no allocations beyond returned `String`.
+
+## Pre-merge baseline security gate (§9.4)
+
+| Audit                          | Depth     | Disposition | Rationale                                                                |
+|--------------------------------|-----------|-------------|--------------------------------------------------------------------------|
+| SECURITY_AUDIT                 | NORMAL    | PASS        | Pure functions; total domain (clamping for pathological inputs); no I/O; no `unsafe`; no globals. SEC-1 / SEC-2 / SEC-3 / SEC-4 of Speck verified by tests + grep. |
+| DEPENDENCY_TREE_SECURITY_AUDIT | FAST      | PASS        | No new crate dependency added (per ADR §7).                              |
+| MEMORY_LEAK_AUDIT              | FAST      | PASS        | Only allocation is the returned `String`; freed by caller on drop. No retained state. |
+
+Findings: none. Continuity check vs Speck ACs 1–12 + SEC-1…4: every AC mapped to a passing test or to a static review gate (SEC-3 grep, SEC-4 review) — all pass.
+
+Status: **DONE**.
