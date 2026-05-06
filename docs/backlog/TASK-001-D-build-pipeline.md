@@ -1,7 +1,7 @@
 # TASK-001-D — Docker build pipeline (multi-stage, multi-target)
 
-**Status:** READY  **Type:** TASK  **Parent:** TASK-001
-**User Mode:** GUIDED  **Guided Flow Stage:** PLAN_READY
+**Status:** DONE  **Type:** TASK  **Parent:** TASK-001
+**User Mode:** GUIDED  **Guided Flow Stage:** POST_AUDIT
 **Created:** 2026-05-06  **Updated:** 2026-05-06
 
 ## Raw Request
@@ -45,4 +45,34 @@
 - SEC-2: no secrets in image layers.
 
 ## Speck Reference
-`docs/specks/SDD-TASK-001-D-build-pipeline.md` (to be authored at start of D).
+[`docs/specks/SDD-TASK-001-D-build-pipeline.md`](../specks/SDD-TASK-001-D-build-pipeline.md)
+
+## Verified results
+
+| Target                            | Size (bytes) | Size (KiB) | `file` output                                            |
+|-----------------------------------|--------------|------------|----------------------------------------------------------|
+| x86_64-unknown-linux-musl         |     406 776  |     397    | ELF 64-bit, x86-64, **static-pie linked**, stripped       |
+| aarch64-unknown-linux-musl        |     354 128  |     346    | ELF 64-bit, ARM aarch64, **statically linked**, stripped  |
+| x86_64-pc-windows-gnu             |     268 800  |     263    | PE32+ executable (console) x86-64, stripped to PDB        |
+
+All under 1 MiB — well below ADR-001's 1.5 MiB ceiling and 1.0 MiB target.
+
+Smoke-runs confirmed: `xdu` ran inside `alpine:3.20` (no glibc, only musl) printing
+`xdu v0.1.0`; `xdu.exe` ran natively on the Windows host printing `xdu v0.1.0`,
+exit code 0.
+
+CI dev steps validated: `cargo fmt --check`, `cargo clippy --locked -D warnings`,
+`cargo check --locked`, `cargo test --locked` (0 tests, 0 failed) — all clean.
+
+## Pre-merge baseline security gate (§9.4)
+
+| Audit                              | Depth       | Disposition | Rationale                                                                 |
+|------------------------------------|-------------|-------------|---------------------------------------------------------------------------|
+| SECURITY_AUDIT                     | NORMAL_SCAN | PASS        | Dockerfile uses pinned tags (`rust:1.85-bookworm`, `alpine:3.20`); apt with `--no-install-recommends` and clean lists; no privileged mode; no exposed ports; no secrets in any layer; no network in build other than crates.io (no deps used) and Debian apt. Build does not require `--privileged`. |
+| DEPENDENCY_TREE_SECURITY_AUDIT     | NORMAL_SCAN | PASS        | `Cargo.lock` lists only `xdu` package; zero third-party crates. Apt deps (`ca-certificates`, `gcc-mingw-w64-x86-64`, `musl-tools`, `file`) come from Debian bookworm main repository. |
+| MEMORY_LEAK_AUDIT                  | FAST_SCAN   | PASS        | N/A — pipeline produces build artifacts; runtime is the binary, which is unchanged from TASK-001-C scaffold (single `println!`). |
+
+Findings: none. No fix sub-tasks. Continuity check across TASK-001 parent: AC-4 (macOS targets)
+deferred per Speck — recorded as a non-blocking follow-up. AC-9 (full byte-for-byte
+reproducibility validation) deferred — single-run determinism only; documented as Phase-3
+work. No silent de-scope.

@@ -1,0 +1,48 @@
+# Lawbook §8.2: all builds and tests run inside containers.
+# Lawbook §8.1: ports configurable via .env. (xdu has no exposed ports.)
+
+services:
+
+  # Cross-compile + extract binary for ${TARGET}.
+  # Usage:
+  #   TARGET=x86_64-unknown-linux-musl docker compose run --rm build
+  #   TARGET=aarch64-unknown-linux-musl docker compose run --rm build
+  #   TARGET=x86_64-pc-windows-gnu docker compose run --rm build
+  build:
+    build:
+      context: .
+      dockerfile: Dockerfile.build
+      target: build
+      args:
+        TARGET: ${TARGET:-x86_64-unknown-linux-musl}
+    environment:
+      TARGET: ${TARGET:-x86_64-unknown-linux-musl}
+    volumes:
+      - ./out:/out_host
+    command:
+      - sh
+      - -c
+      - |
+        set -eu
+        case "$$TARGET" in *windows*) ext=.exe ;; *) ext= ;; esac
+        mkdir -p "/out_host/$$TARGET"
+        cp "/out/$$TARGET/xdu$$ext" "/out_host/$$TARGET/"
+        ls -la "/out_host/$$TARGET/"
+
+  # Dev / CI runner — used by scripts/ci.sh for fmt / clippy / check / test.
+  # Source is mounted; cargo cache lives in a named volume.
+  dev:
+    build:
+      context: .
+      dockerfile: Dockerfile.build
+      target: base
+    working_dir: /src
+    volumes:
+      - .:/src
+      - cargo-registry:/usr/local/cargo/registry
+      - cargo-target:/src/target
+    command: ["sh"]
+
+volumes:
+  cargo-registry:
+  cargo-target:

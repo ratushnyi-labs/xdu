@@ -100,8 +100,8 @@ Each leaf MUST be re-estimated independently and reach `ABOVE_EASY` or `EASY` be
 |---------------------|--------------------------------------------------|----------|----------|---------------|---------------|
 | TASK-001-A          | Author `docs/spec.md` v0.1.0                     | DESIGN   | EASY     | —             | DONE          |
 | TASK-001-B          | ADR-001: baseline architecture                   | DESIGN   | EASY     | —             | DONE          |
-| TASK-001-C          | Repo scaffold (Cargo + LICENSE + git + ignores)  | INFRA    | EASY     | A, B          | MERGED        |
-| TASK-001-D          | Docker build pipeline (multi-stage, multi-target)| INFRA    | ABOVE_EASY| C            | READY         |
+| TASK-001-C          | Repo scaffold (Cargo + LICENSE + git + ignores)  | INFRA    | EASY     | A, B          | DONE          |
+| TASK-001-D          | Docker build pipeline (multi-stage, multi-target)| INFRA    | ABOVE_EASY| C            | DONE          |
 | TASK-001-E          | Scanner module (BE)                              | BACKEND  | ABOVE_EASY| C            | READY         |
 | TASK-001-F          | Tree model (BE)                                  | BACKEND  | ABOVE_EASY| C            | READY         |
 | TASK-001-G          | Size formatter + bar (BE)                        | BACKEND  | EASY     | C             | READY         |

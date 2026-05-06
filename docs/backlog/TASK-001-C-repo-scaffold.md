@@ -1,7 +1,7 @@
 # TASK-001-C — Repo scaffold
 
-**Status:** MERGED  **Type:** TASK  **Parent:** TASK-001
-**User Mode:** GUIDED  **Guided Flow Stage:** VERIFY (build pipeline pending in TASK-001-D will verify AC-1/AC-5)
+**Status:** DONE  **Type:** TASK  **Parent:** TASK-001
+**User Mode:** GUIDED  **Guided Flow Stage:** POST_AUDIT
 **Created:** 2026-05-06  **Updated:** 2026-05-06
 
 ## Raw Request
@@ -56,5 +56,9 @@ Findings: none. No fix sub-tasks created. Continuity check across parent TASK-00
 
 ## Final
 
-Merged at commit `0d59885` (root commit, branch `main`). Status held at `MERGED` until
-TASK-001-D's pipeline verifies AC-1/AC-5 at runtime; on first green build, advance to `DONE`.
+Merged at commit `0d59885` (root commit, branch `main`). AC-1/AC-5 verified at runtime
+by TASK-001-D's pipeline:
+- `cargo build --profile release-min --target x86_64-unknown-linux-musl --locked` succeeds
+- Resulting binary prints `xdu v0.1.0` and exits 0 (verified by running inside `alpine:3.20`).
+
+Status: **DONE**.

@@ -1,0 +1,56 @@
+# syntax=docker/dockerfile:1.7
+
+# =============================================================================
+# Stage: base — Rust toolchain + cross-compile linkers + rustup targets
+# =============================================================================
+FROM rust:1.85-bookworm AS base
+
+# mingw-w64 provides x86_64-pc-windows-gnu's C runtime + linker.
+# musl-tools provides musl-gcc as a fallback for x86_64-unknown-linux-musl
+# (rust-lld handles linking when there are no C deps; musl-gcc is a safety net).
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        ca-certificates \
+        gcc-mingw-w64-x86-64 \
+        musl-tools \
+        file \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN rustup target add \
+        x86_64-unknown-linux-musl \
+        aarch64-unknown-linux-musl \
+        x86_64-pc-windows-gnu \
+    && rustup component add rustfmt clippy
+
+WORKDIR /src
+
+# =============================================================================
+# Stage: build — compile real source for ${TARGET}
+# =============================================================================
+FROM base AS build
+
+ARG TARGET=x86_64-unknown-linux-musl
+ENV TARGET=${TARGET}
+
+COPY . .
+
+RUN cargo build --profile release-min --target "${TARGET}" --locked
+
+RUN set -eu; \
+    case "${TARGET}" in \
+      *windows*) ext=".exe" ;; \
+      *)         ext="" ;; \
+    esac; \
+    mkdir -p "/out/${TARGET}"; \
+    cp "target/${TARGET}/release-min/xdu${ext}" "/out/${TARGET}/"; \
+    file "/out/${TARGET}/xdu${ext}"; \
+    wc -c "/out/${TARGET}/xdu${ext}"
+
+# =============================================================================
+# Stage: artifact — scratch image with just the binary at /
+# Useful for `docker create + docker cp` extraction in CI.
+# =============================================================================
+FROM scratch AS artifact
+
+ARG TARGET=x86_64-unknown-linux-musl
+COPY --from=build /out/${TARGET}/ /
