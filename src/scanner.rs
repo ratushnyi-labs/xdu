@@ -174,6 +174,20 @@ fn scan_into(state: &Mutex<ScanResult>, root: PathBuf, opts: ScanOpts) {
     state.lock().unwrap().running = false;
 }
 
+/// Soft cap on batched inserts per lock acquisition. Keeps the lock duration
+/// bounded for pathological directories (>4096 entries). TASK-007-D performance
+/// polish.
+const WALK_BATCH_CAP: usize = 4096;
+
+struct StagedEntry {
+    kind: NodeKind,
+    name: String,
+    size: u64,
+    alloc: u64,
+    accessed_secs: u64,
+    entry_path: PathBuf,
+}
+
 #[allow(clippy::too_many_arguments)]
 fn walk_one(
     state: &Mutex<ScanResult>,
@@ -200,20 +214,18 @@ fn walk_one(
             return true;
         }
     };
+
+    // Stage all entries' inserts + deferred errors locally; apply under a single
+    // lock acquisition per batch (TASK-007-D). The previous design took the lock
+    // once per entry — N acquisitions for N entries. This brings it to ~1.
+    let mut batch: Vec<StagedEntry> = Vec::with_capacity(64);
+    let mut deferred_errors: Vec<(PathBuf, io::Error)> = Vec::new();
+
     for entry in entries {
         let entry = match entry {
             Ok(e) => e,
             Err(e) => {
-                let mut guard = state.lock().unwrap();
-                let s: &mut ScanResult = &mut guard;
-                push_err(
-                    &mut s.errors,
-                    &mut s.overflow_errors,
-                    opts.max_errors,
-                    parent_path,
-                    &e,
-                );
-                s.tree.mark_error(parent_id);
+                deferred_errors.push((parent_path.to_path_buf(), e));
                 continue;
             }
         };
@@ -221,16 +233,7 @@ fn walk_one(
         let meta = match entry.metadata() {
             Ok(m) => m,
             Err(e) => {
-                let mut guard = state.lock().unwrap();
-                let s: &mut ScanResult = &mut guard;
-                push_err(
-                    &mut s.errors,
-                    &mut s.overflow_errors,
-                    opts.max_errors,
-                    &entry_path,
-                    &e,
-                );
-                s.tree.mark_error(parent_id);
+                deferred_errors.push((entry_path, e));
                 continue;
             }
         };
@@ -241,23 +244,94 @@ fn walk_one(
         let name = entry.file_name().to_string_lossy().into_owned();
         let (size, alloc) = compute_sizes(&meta, kind, hardlinks);
         let accessed_secs = accessed_unix_secs(&meta);
-        let mut g = state.lock().unwrap();
-        match g.tree.add_child(parent_id, kind, name, size, alloc) {
-            Ok(id) => {
-                g.tree.set_accessed(id, accessed_secs);
-                g.tree.bubble_up_add(id, size, alloc, 1);
-                if matches!(kind, NodeKind::Dir) {
-                    drop(g);
-                    stack.push(Frame::Pre(id, entry_path));
+        batch.push(StagedEntry {
+            kind,
+            name,
+            size,
+            alloc,
+            accessed_secs,
+            entry_path,
+        });
+        if batch.len() >= WALK_BATCH_CAP
+            && !apply_batch(
+                state,
+                stack,
+                parent_id,
+                &mut batch,
+                &mut deferred_errors,
+                opts,
+            )
+        {
+            return false;
+        }
+    }
+
+    apply_batch(
+        state,
+        stack,
+        parent_id,
+        &mut batch,
+        &mut deferred_errors,
+        opts,
+    )
+}
+
+/// Apply one batch of staged inserts + deferred errors under a single lock.
+/// Returns `false` if the tree's arena hit `OutOfCapacity` mid-batch (signals
+/// the caller to stop). Deferred stack pushes are drained AFTER the lock is
+/// released to keep the critical section short.
+fn apply_batch(
+    state: &Mutex<ScanResult>,
+    stack: &mut Vec<Frame>,
+    parent_id: NodeId,
+    batch: &mut Vec<StagedEntry>,
+    deferred_errors: &mut Vec<(PathBuf, io::Error)>,
+    opts: &ScanOpts,
+) -> bool {
+    if batch.is_empty() && deferred_errors.is_empty() {
+        return true;
+    }
+    let mut stack_pushes: Vec<(NodeId, PathBuf)> = Vec::with_capacity(batch.len() / 4);
+    let mut overflowed = false;
+    {
+        let mut guard = state.lock().unwrap();
+        let s: &mut ScanResult = &mut guard;
+        for (path, e) in deferred_errors.drain(..) {
+            push_err(
+                &mut s.errors,
+                &mut s.overflow_errors,
+                opts.max_errors,
+                &path,
+                &e,
+            );
+            s.tree.mark_error(parent_id);
+        }
+        for entry in batch.drain(..) {
+            match s
+                .tree
+                .add_child(parent_id, entry.kind, entry.name, entry.size, entry.alloc)
+            {
+                Ok(id) => {
+                    s.tree.set_accessed(id, entry.accessed_secs);
+                    s.tree.bubble_up_add(id, entry.size, entry.alloc, 1);
+                    if matches!(entry.kind, NodeKind::Dir) {
+                        stack_pushes.push((id, entry.entry_path));
+                    }
                 }
-            }
-            Err(TreeError::OutOfCapacity) => return false,
-            Err(TreeError::InvalidParent) => {
-                g.tree.mark_error(parent_id);
+                Err(TreeError::OutOfCapacity) => {
+                    overflowed = true;
+                    break;
+                }
+                Err(TreeError::InvalidParent) => {
+                    s.tree.mark_error(parent_id);
+                }
             }
         }
     }
-    true
+    for (id, path) in stack_pushes {
+        stack.push(Frame::Pre(id, path));
+    }
+    !overflowed
 }
 
 struct Scan;

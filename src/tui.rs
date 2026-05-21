@@ -1045,13 +1045,28 @@ fn render_errors(f: &mut Frame, area: Rect, app: &App) {
 }
 
 fn sort_label(k: SortKey) -> &'static str {
-    match k {
-        SortKey::SizeDesc => "size-",
-        SortKey::SizeAsc => "size+",
-        SortKey::NameAsc => "name+",
-        SortKey::NameDesc => "name-",
-        SortKey::CountDesc => "count-",
-        SortKey::CountAsc => "count+",
+    sort_label_for(k, is_utf8_terminal())
+}
+
+fn sort_label_for(k: SortKey, utf8: bool) -> &'static str {
+    if utf8 {
+        match k {
+            SortKey::SizeDesc => "size↓",
+            SortKey::SizeAsc => "size↑",
+            SortKey::NameAsc => "name↑",
+            SortKey::NameDesc => "name↓",
+            SortKey::CountDesc => "count↓",
+            SortKey::CountAsc => "count↑",
+        }
+    } else {
+        match k {
+            SortKey::SizeDesc => "size-",
+            SortKey::SizeAsc => "size+",
+            SortKey::NameAsc => "name+",
+            SortKey::NameDesc => "name-",
+            SortKey::CountDesc => "count-",
+            SortKey::CountAsc => "count+",
+        }
     }
 }
 
@@ -1199,6 +1214,49 @@ mod tests {
         ] {
             assert!(!sort_label(k).is_empty());
         }
+    }
+
+    #[test]
+    fn task007c_sort_label_uses_arrows_in_utf8() {
+        assert_eq!(sort_label_for(SortKey::SizeDesc, true), "size↓");
+        assert_eq!(sort_label_for(SortKey::SizeAsc, true), "size↑");
+        assert_eq!(sort_label_for(SortKey::NameAsc, true), "name↑");
+        assert_eq!(sort_label_for(SortKey::NameDesc, true), "name↓");
+        assert_eq!(sort_label_for(SortKey::CountDesc, true), "count↓");
+        assert_eq!(sort_label_for(SortKey::CountAsc, true), "count↑");
+    }
+
+    #[test]
+    fn task007c_sort_label_falls_back_to_ascii() {
+        assert_eq!(sort_label_for(SortKey::SizeDesc, false), "size-");
+        assert_eq!(sort_label_for(SortKey::SizeAsc, false), "size+");
+        assert_eq!(sort_label_for(SortKey::CountAsc, false), "count+");
+    }
+
+    #[test]
+    fn task007c_name_column_width_floors_at_8() {
+        // Width < fixed (35 cells of bar/size/date/separators) → name column floors at 8.
+        assert_eq!(name_column_width(30), 8);
+        assert_eq!(name_column_width(0), 8);
+        assert_eq!(name_column_width(35), 8);
+        // Wider terminal yields proportional name column.
+        assert_eq!(
+            name_column_width(80),
+            80 - (BAR_W + SEP_W + SIZE_W + SEP_W + DATE_W + SEP_W)
+        );
+    }
+
+    #[test]
+    fn task007c_compose_footer_narrower_than_right_does_not_panic() {
+        // Width 5, right segment is ` right ` (7 chars) — the right wins via
+        // `truncate_left(right, width)`.
+        let s = compose_footer(" left ", " right ", 5);
+        assert_eq!(s.chars().count(), 5);
+    }
+
+    #[test]
+    fn task007c_compose_footer_width_zero_is_empty() {
+        assert_eq!(compose_footer("anything", "more", 0), "");
     }
 
     #[test]
