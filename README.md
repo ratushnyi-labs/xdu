@@ -1,119 +1,139 @@
-# xdu
+<p align="center">
+  <h1 align="center">xdu</h1>
+  <p align="center">Read-only disk-usage explorer with a terminal UI. Single static binary per platform.</p>
+</p>
 
-Read-only disk-usage explorer with a terminal UI. Single static binary per
-platform, well under 1 MiB.
+<p align="center">
+  <a href="https://github.com/ratushnyi-labs/xdu/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/ratushnyi-labs/xdu/actions/workflows/ci.yml/badge.svg"></a>
+  <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/License-MIT-blue.svg"></a>
+  <a href="https://github.com/ratushnyi-labs/xdu/releases"><img alt="Release" src="https://img.shields.io/github/v/release/ratushnyi-labs/xdu"></a>
+</p>
 
-```
- /home/me/projects/xdu/                                                          
-██████████  675 KiB  out/x86_64-unknown-linux-musl/xdu                          
-█████▌      354 KiB  src/
-███▏        198 KiB  docs/
-██▌         141 KiB  Cargo.lock
-▏             3 KiB  README.md
-```
+---
 
-`xdu` scans a directory and lets you navigate the result with the keyboard.
-Each row shows the entry's share of its parent as a bar plus the absolute
-size in `B`/`KiB`/`MiB`/`GiB`/`TiB` (or SI units with `--si`). The footer's
-right edge shows free space on the volume containing the scan root.
+`xdu` scans a directory and lets you navigate the resulting tree to see where the space
+is used. Each row shows the entry name, a relative-size bar, the absolute size
+(`B / KiB / MiB / GiB / TiB`, or SI units with `--si`), and the last-access date.
+The footer's right edge shows free space on the volume containing the scan root.
 
-`xdu` is **read-only by default**. The only filesystem-mutating action is
-the explicit `d` keybinding, which opens a confirmation modal whose default
-focus is `[ No ]`. There is no `rename` / `chmod` / `truncate` path.
-No network calls, no telemetry.
+xdu is **read-only by default**. The only mutating actions are opt-in behind explicit
+keybindings — `d` deletes (with a `[ No ]`-default confirmation modal) and, on Windows,
+`f` force-closes foreign file handles via `DuplicateHandle(DUPLICATE_CLOSE_SOURCE)` to
+unblock a locked file (also gated by a `[ No ]`-default confirmation modal).
+No `rename` / `chmod` / `truncate` / `kill` / `TerminateProcess` anywhere.
+No network, no telemetry.
 
-## Features
+## Supported Targets
 
-- Recursive scan with progress.
-- Interactive tree navigation (arrow keys + `hjkl`).
-- Sort by size / name / count, ascending or descending.
-- IEC binary (`KiB`) and SI decimal (`KB`) units.
-- Hardlink deduplication (Unix; Windows v0.2).
-- Mount-boundary detection (Unix; Windows v0.2).
-- JSON export of the current subtree.
-- Error log: per-entry I/O failures are recorded but do not abort the scan.
-- Read-only by design — no modify / delete keybindings exist.
+| Target                            | Arch  | Notes                                              |
+|-----------------------------------|-------|----------------------------------------------------|
+| `x86_64-unknown-linux-musl`       | x64   | Fully static; runs on any Linux kernel 3.2+        |
+| `aarch64-unknown-linux-musl`      | ARM64 | Fully static; runs on any Linux kernel 3.2+        |
+| `x86_64-apple-darwin`             | x64   | macOS Intel                                        |
+| `aarch64-apple-darwin`            | ARM64 | macOS Apple Silicon                                |
+| `x86_64-pc-windows-msvc`          | x64   | PE32+ console; lock-holder detection via `rstrtmgr` |
+| `aarch64-pc-windows-msvc`         | ARM64 | PE32+ console; lock-holder detection via `rstrtmgr` |
 
-## Install
-
-### Linux
+## Quick Start
 
 ```sh
-chmod +x xdu
-./xdu /path/to/inspect
+xdu                  # scan current directory
+xdu /home/me/code    # scan a specific path
+xdu /                # scan the filesystem root (Unix)
+xdu C:\              # scan a drive root (Windows)
+xdu --si             # use SI units (KB, MB, ...) instead of IEC (KiB, MiB, ...)
+xdu --cross-fs       # follow mount points (Unix; v0.2 on Windows)
 ```
 
-The musl static binary runs on any Linux kernel ≥ 3.2 regardless of glibc
-version (verified inside `alpine:3.20` which has only musl).
-
-### Windows
-
-```pwsh
-.\xdu.exe C:\path\to\inspect
-```
-
-### macOS
-
-Build from source (osxcross automation is v0.2 work):
-
-```sh
-cargo build --profile release-min
-```
-
-See [`docs/installation-manual.md`](docs/installation-manual.md) for
-target details and per-platform notes.
-
-## Keybindings
+Inside the TUI:
 
 | Key | Action |
 |-----|--------|
-| `↑` / `k`, `↓` / `j` | move selection |
-| `→` / `l` / Enter | enter directory |
-| `←` / `h` / Backspace | go up |
-| `s` | cycle sort key |
-| `u` | toggle IEC / SI units |
-| `r` | rescan from root |
-| `e` | export current subtree to `xdu-export.json` |
-| `d` | **delete** selected entry (with `[ No ]`-default confirmation modal) |
-| `!` | show error log |
-| `?` / `F1` | show help |
-| `q` / Ctrl-C | quit |
+| `↑` / `k`, `↓` / `j`  | move selection |
+| `→` / `l` / Enter      | enter directory |
+| `←` / `h` / Backspace  | go up (rescans filesystem parent at scan root) |
+| `s`                    | cycle sort key (size↓ / name↑ / count↓ / size↑ / name↓ / count↑) |
+| `u`                    | toggle IEC / SI size units |
+| `r`                    | rescan from root |
+| `e`                    | export current subtree to `xdu-export.json` |
+| `d`                    | **delete** selected entry (with `[ No ]`-default confirmation modal) |
+| `f`                    | (inside lock-prompt) **force-close** foreign handles (Windows, with confirmation) |
+| `!`                    | show error log |
+| `?` / `F1`             | show help |
+| `q` / Ctrl-C           | quit |
 
-Full table in [`docs/configuration-manual.md`](docs/configuration-manual.md).
+## Install
 
-## Build
+### Pre-built binaries
 
-All builds run inside Docker per project rule §8.2 (host isolation). No
-host install of Rust required.
+Download from [GitHub Releases](https://github.com/ratushnyi-labs/xdu/releases).
 
 ```sh
-sh scripts/build.sh        # all 3 supported targets, with size enforcement
-sh scripts/ci.sh           # fmt + clippy + check + test + multi-target build
+# Linux x64
+curl -sSfL https://github.com/ratushnyi-labs/xdu/releases/latest/download/xdu-x86_64-unknown-linux-musl.tar.gz \
+    | tar xzf - -C /usr/local/bin
+
+# Linux ARM64
+curl -sSfL https://github.com/ratushnyi-labs/xdu/releases/latest/download/xdu-aarch64-unknown-linux-musl.tar.gz \
+    | tar xzf - -C /usr/local/bin
 ```
 
-Single-target build:
+For macOS and Windows, download the matching archive and place the binary somewhere
+on your `PATH`.
+
+### Build from source
+
+All builds run inside Docker per the project's host-isolation rule:
 
 ```sh
+# Single target
 TARGET=x86_64-unknown-linux-musl docker compose run --rm build
+
+# All six targets
+sh scripts/build.sh
 ```
 
-Output: `out/<TARGET>/xdu(.exe)`.
+Output: `out/<TARGET>/xdu(.exe)`. Each binary is checked against a 1.5 MiB hard
+ceiling (configurable via `SIZE_CEILING_BYTES` in `.env`).
 
-Build-time size budgets per ADR-001:
+## Testing
 
-- Hard ceiling: 1.5 MiB stripped (build fails if exceeded).
-- Target: < 1.0 MiB (v0.1.0 hits ~600 KiB).
+```sh
+docker compose run --rm dev sh -c "\
+  cargo fmt --all -- --check \
+  && cargo clippy --all-targets --all-features --locked -- -D warnings \
+  && cargo test --locked"
+```
 
-## Project documentation
+## Documentation
 
-- [`docs/spec.md`](docs/spec.md) — specification (UC-001 … UC-007, BR-001 … BR-006, WF-001 / WF-002, known limitations).
-- [`docs/architecture/ADR-001-baseline-architecture.md`](docs/architecture/ADR-001-baseline-architecture.md) — architecture decision record.
-- [`docs/development-manual.md`](docs/development-manual.md) — Docker-based dev workflow.
-- [`docs/installation-manual.md`](docs/installation-manual.md) — per-platform install.
-- [`docs/configuration-manual.md`](docs/configuration-manual.md) — every flag, every env var, color rules, size budgets.
-- [`docs/specks/`](docs/specks/) — implementation Specks per leaf.
-- [`docs/backlog/`](docs/backlog/) — backlog and lifecycle records.
+| Document                                                   | Audience      |
+|------------------------------------------------------------|---------------|
+| [Specification](docs/spec.md)                              | Designers     |
+| [Installation Manual](docs/installation-manual.md)         | End-users     |
+| [Configuration Manual](docs/configuration-manual.md)       | End-users     |
+| [Development Manual](docs/development-manual.md)           | Contributors  |
+| [Architecture Decision](docs/architecture/ADR-001-baseline-architecture.md) | Contributors |
+
+### User Manual
+
+| Language     | File |
+|--------------|------|
+| English      | _coming in TASK-007-N10_ |
+| Українська   | _coming in TASK-007-N10_ |
+| Español      | _coming in TASK-007-N10_ |
+| Français     | _coming in TASK-007-N10_ |
+| Italiano     | _coming in TASK-007-N10_ |
+| Português    | _coming in TASK-007-N10_ |
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md).
+
+## Security
+
+See [SECURITY.md](.github/SECURITY.md).
 
 ## License
 
-[MIT](LICENSE).
+[MIT](LICENSE)

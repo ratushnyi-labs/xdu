@@ -1,0 +1,8 @@
+# Default owner for everything
+* @paveldhq
+
+# Per-module paths
+/src/ @paveldhq
+/scripts/ @paveldhq
+/.github/ @paveldhq
+/Dockerfile* @paveldhq

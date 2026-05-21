@@ -1,20 +1,11 @@
-# Default: text files use LF (Unix line endings) regardless of host OS.
-# This protects shell scripts when checked out on Windows from CRLF mangling.
-
 * text=auto eol=lf
-
-# Force LF on shell scripts and Dockerfiles (sh chokes on \r in shebangs).
-*.sh        text eol=lf
-Dockerfile* text eol=lf
-*.toml      text eol=lf
-*.yml       text eol=lf
-*.yaml      text eol=lf
-
-# Force CRLF only on files that are exclusively for Windows tooling.
-*.bat       text eol=crlf
-*.cmd       text eol=crlf
-
-# Binary blobs (none yet, but future-proof).
-*.png       binary
-*.jpg       binary
-*.ico       binary
+*.exe binary
+*.dll binary
+*.so binary
+*.dylib binary
+*.png binary
+*.jpg binary
+*.gz binary
+*.zip binary
+*.tar binary
+*.crt binary

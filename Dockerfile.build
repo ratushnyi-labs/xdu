@@ -34,7 +34,7 @@ ENV TARGET=${TARGET}
 
 COPY . .
 
-RUN cargo build --profile release-min --target "${TARGET}" --locked
+RUN cargo build --release --target "${TARGET}" --locked
 
 RUN set -eu; \
     case "${TARGET}" in \
@@ -42,7 +42,7 @@ RUN set -eu; \
       *)         ext="" ;; \
     esac; \
     mkdir -p "/out/${TARGET}"; \
-    cp "target/${TARGET}/release-min/xdu${ext}" "/out/${TARGET}/"; \
+    cp "target/${TARGET}/release/xdu${ext}" "/out/${TARGET}/"; \
     file "/out/${TARGET}/xdu${ext}"; \
     wc -c "/out/${TARGET}/xdu${ext}"
 

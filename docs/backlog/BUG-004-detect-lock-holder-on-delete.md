@@ -3,6 +3,22 @@
 **Status:** DONE  **Type:** BUG
 **User Mode:** GUIDED  **Guided Flow Stage:** POST_AUDIT
 Pre-merge baseline security gate: PASS — Restart Manager calls are enumeration-only (no `TerminateProcess`, no `NtClose`); each `unsafe` block carries a `// SAFETY:` comment per ADR §7; `#[link(name = "rstrtmgr")]` adds the kernel32-adjacent system library link only on Windows; `RmStartSession` paired with `RmEndSession` via RAII guard on every exit path. 91 tests pass (85 unit + 6 integration). Multi-target rebuild within budget (~660 / 660 / 519 KiB).
+
+## Compliance Notes (added 2026-05-06 after lawbook v0.7.0 → v0.8.0 upgrade)
+
+**Cross-agent attack review skip (§9.5.2 — recorded retroactively):**
+
+- Both LIGHT and FULL §9.5 passes are **SKIPPED** for this item.
+- Concrete reason: no second-agent vendor reachable from this laptop. User statement
+  (2026-05-06, verbatim): _"this laptop has access to claude only, the gemini/gpt
+  are cut-off"_. Per §9.5.1, a human attacker MAY substitute for the second agent;
+  the user has not elected to perform that substitution for this item.
+- Retroactive context: this item was authored and committed (`2ca8cac`) under
+  lawbook **v0.7.0**, which did not include §9.5. The session's lawbook reload
+  picked up v0.8.0, which introduces the rule.
+- Continuity surfacing per §9.5.2: skip is acknowledged here so it does not silently
+  omit the gate. Pre-DONE check 9 (§12.8.1) treats this as an active-Compliance-Notes
+  skip rather than a `MAJOR` continuity blocker.
 **Created:** 2026-05-06  **Updated:** 2026-05-06
 
 ## Raw Request

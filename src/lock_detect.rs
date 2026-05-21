@@ -536,7 +536,6 @@ mod platform_impl {
         let rest = &trimmed[2..]; // strip "C:" — keep the leading "\"
         Some(format!("{device}{rest}"))
     }
-
 }
 
 #[cfg(not(windows))]

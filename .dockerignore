@@ -1,23 +1,9 @@
-# Mirror .gitignore plus dev-only state Docker should never see
-.git/
-.gitignore
-target/
-out/
-.dev-data/
-.dev-temp/
-.env
-.env.*
-.idea/
-.vscode/
-*.iml
-*.swp
-.DS_Store
-Thumbs.db
-desktop.ini
-coverage/
+target
+.git
+.idea
+.dev-data
+.dev-temp
 *.profraw
-*.profdata
-**/*.rs.bk
-
-# Docs / specs / backlog need not enter the build context
-docs/
+lcov.info
+dist
+.build
