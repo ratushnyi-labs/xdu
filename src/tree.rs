@@ -175,6 +175,16 @@ impl Tree {
         }
     }
 
+    /// Mark every node in the tree as finalized. Test-only convenience for the
+    /// snapshot harness (TASK-007-F): a hand-built fixture tree has all data
+    /// in place from the start, so we want all rows to render real numbers
+    /// rather than the mid-scan spinner.
+    pub fn finalize_all(&mut self) {
+        for n in &mut self.nodes {
+            n.finalized = true;
+        }
+    }
+
     /// Walk the parent chain from `from` (excluding `from` itself) and
     /// saturating-add `(size, alloc, entries)` to every ancestor. Used by the
     /// async scanner for eager aggregation so partial sums are visible mid-scan.
@@ -527,13 +537,13 @@ mod tests {
     }
 
     #[test]
-    fn sec_uc002_get_unknown_id_returns_none() {
+    fn test_sec_uc002_get_unknown_id_returns_none() {
         let t = Tree::new(NodeKind::Dir, "/");
         assert!(t.get(NodeId(99)).is_none());
     }
 
     #[test]
-    fn sec_uc002_aggregate_does_not_panic_on_overflow_chain() {
+    fn test_sec_uc002_aggregate_does_not_panic_on_overflow_chain() {
         let mut t = Tree::new(NodeKind::Dir, "/");
         let root = t.root();
         for _ in 0..3 {
@@ -546,14 +556,14 @@ mod tests {
     }
 
     #[test]
-    fn sec_uc002_path_on_unknown_id_does_not_panic() {
+    fn test_sec_uc002_path_on_unknown_id_does_not_panic() {
         let t = Tree::new(NodeKind::Dir, "/");
         let p = t.path(NodeId(99));
         assert!(p.is_empty());
     }
 
     #[test]
-    fn sec_uc002_invalid_parent_does_not_corrupt_state() {
+    fn test_sec_uc002_invalid_parent_does_not_corrupt_state() {
         let mut t = Tree::new(NodeKind::Dir, "/");
         let _ = t.add_child(NodeId(5), NodeKind::File, "x", 0, 0);
         assert_eq!(t.len(), 1);

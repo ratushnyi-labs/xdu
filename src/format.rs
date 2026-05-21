@@ -245,13 +245,13 @@ mod tests {
     }
 
     #[test]
-    fn sec_uc003_format_size_no_panic_on_max() {
+    fn test_sec_uc003_format_size_no_panic_on_max() {
         let _ = format_size(u64::MAX, SizeMode::Iec);
         let _ = format_size(u64::MAX, SizeMode::Si);
     }
 
     #[test]
-    fn sec_uc003_bar_no_panic_on_extreme_inputs() {
+    fn test_sec_uc003_bar_no_panic_on_extreme_inputs() {
         let _ = bar(f64::NAN, 10, true);
         let _ = bar(f64::INFINITY, 10, true);
         let _ = bar(f64::NEG_INFINITY, 10, true);
@@ -260,7 +260,7 @@ mod tests {
     }
 
     #[test]
-    fn sec_uc003_bar_nan_yields_empty() {
+    fn test_sec_uc003_bar_nan_yields_empty() {
         // Defined behavior: NaN treated as 0.0.
         assert_eq!(bar(f64::NAN, 10, true), "          ");
     }

@@ -4,9 +4,11 @@
 //! TUI, and export. The binary in `src/main.rs` wires them together.
 
 pub mod disk_space;
+pub mod drives_win;
 pub mod export;
 pub mod format;
 pub mod lock_detect;
 pub mod scanner;
+pub mod trash;
 pub mod tree;
 pub mod tui;

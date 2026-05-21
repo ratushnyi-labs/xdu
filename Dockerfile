@@ -29,7 +29,12 @@ RUN rustup target add \
         aarch64-pc-windows-msvc \
         x86_64-apple-darwin \
         aarch64-apple-darwin \
-    && rustup component add rustfmt clippy
+    && rustup component add rustfmt clippy llvm-tools-preview
+
+# cargo-llvm-cov for coverage gating per lawbook §7.1. Kept in the base stage
+# so `docker compose run --rm test cargo llvm-cov ...` works without the
+# heavier cross-tools layer.
+RUN cargo install --locked cargo-llvm-cov
 
 WORKDIR /src
 

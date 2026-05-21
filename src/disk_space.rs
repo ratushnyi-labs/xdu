@@ -1,9 +1,14 @@
 //! Free / total space lookup for the volume containing a path.
 //!
-//! Linux: raw FFI to `statvfs(3)`. Windows: raw FFI to `GetDiskFreeSpaceExW`.
-//! Other Unix (macOS / BSDs) returns `None` in v0.1.x — recorded as a v0.2
-//! follow-up in `docs/spec.md` §9. ADR §7 explicitly permits these small
-//! `unsafe` FFI blocks.
+//! Linux: raw FFI to `statvfs(3)`.
+//! macOS: raw FFI to Darwin's `statfs(2)` from `<sys/mount.h>` — chosen over
+//! `statvfs` because Darwin's `statvfs` uses 32-bit block counts and silently
+//! truncates on volumes ≥ 16 TiB. `statfs` keeps `f_blocks`/`f_bavail` as
+//! `uint64_t`.
+//! Windows: raw FFI to `GetDiskFreeSpaceExW`.
+//! Other Unix (FreeBSD / NetBSD / OpenBSD) returns `None` in v0.1.x — recorded
+//! as a v0.2 follow-up in `docs/spec.md` §9. ADR §7 explicitly permits these
+//! small `unsafe` FFI blocks.
 
 use crate::format::{format_size, SizeMode};
 use std::path::Path;
@@ -86,6 +91,61 @@ mod platform_impl {
     }
 }
 
+#[cfg(target_os = "macos")]
+mod platform_impl {
+    use std::ffi::CString;
+    use std::os::raw::{c_char, c_int};
+    use std::path::Path;
+
+    // Darwin <sys/mount.h> `struct statfs` — modern (post-Mac OS X 10.6)
+    // layout. We only ever read the prefix up to and including `f_bavail`,
+    // so the trailing fields are represented as opaque byte padding sized
+    // to match the C struct's total size. The fixed-buffer-array fields
+    // `f_fstypename` (16) and `f_mntonname`/`f_mntfromname` (1024 each)
+    // dominate the layout; the published total is 2160 bytes on x86_64 and
+    // aarch64 alike. We size the padding generously and rely on the prefix
+    // alignment being stable.
+    #[repr(C)]
+    struct Statfs {
+        f_bsize: u32,
+        f_iosize: i32,
+        f_blocks: u64,
+        f_bfree: u64,
+        f_bavail: u64,
+        // Remaining fields (f_files, f_ffree, f_fsid, f_owner, f_type,
+        // f_flags, f_fssubtype, fstypename[16], mntonname[1024],
+        // mntfromname[1024], f_flags_ext, f_reserved[7]) — we don't read
+        // any of them. Sized to match Darwin's 2160-byte total.
+        _tail: [u8; 2160 - 4 - 4 - 8 - 8 - 8],
+    }
+
+    unsafe extern "C" {
+        fn statfs(path: *const c_char, buf: *mut Statfs) -> c_int;
+    }
+
+    pub fn free_and_total(path: &Path) -> Option<(u64, u64)> {
+        let s = path.to_str()?;
+        let cstr = CString::new(s).ok()?;
+        // SAFETY: `cstr.as_ptr()` is a valid NUL-terminated C string for the
+        // duration of this call. `buf` is a stack-allocated, zero-initialized
+        // `Statfs` we only read from after a successful call. Darwin's
+        // `statfs` is a stable POSIX-derived system call available since
+        // 10.6 and supported on all currently-shipping macOS versions.
+        let (rc, buf) = unsafe {
+            let mut buf: Statfs = std::mem::zeroed();
+            let rc = statfs(cstr.as_ptr(), &mut buf);
+            (rc, buf)
+        };
+        if rc != 0 {
+            return None;
+        }
+        let bsize = buf.f_bsize as u64;
+        let total = buf.f_blocks.saturating_mul(bsize);
+        let free = buf.f_bavail.saturating_mul(bsize);
+        Some((free, total))
+    }
+}
+
 #[cfg(windows)]
 mod platform_impl {
     use std::os::windows::ffi::OsStrExt;
@@ -120,7 +180,7 @@ mod platform_impl {
     }
 }
 
-#[cfg(all(unix, not(target_os = "linux")))]
+#[cfg(all(unix, not(any(target_os = "linux", target_os = "macos"))))]
 mod platform_impl {
     use std::path::Path;
     pub fn free_and_total(_path: &Path) -> Option<(u64, u64)> {

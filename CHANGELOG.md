@@ -7,6 +7,31 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+- `--trash` flag — move deleted items to the OS-native trash instead of
+  permanently deleting them. Linux follows the freedesktop.org Trash spec v1.0
+  (`$XDG_DATA_HOME/Trash` with `.trashinfo` sidecars). Windows uses
+  `SHFileOperationW(FO_DELETE | FOF_ALLOWUNDO | FOF_NO_UI)`. macOS / BSD return
+  `Unsupported` (v0.2 follow-up). (TASK-007-J / LATER-007.)
+- Windows drive picker — when `xdu` is launched with no path argument on
+  Windows, it prints a numbered drive list (with type + label + free / total
+  space) and reads stdin for a selection. Other platforms continue to default
+  to the current directory. (TASK-007-H / TASK-003.)
+- macOS free-space indicator — Darwin's `statfs(2)` FFI lights up the footer
+  free-space figure on x86_64 and aarch64 Apple Silicon. (TASK-007-L / LATER-009.)
+- Linux lock-holder enumeration — walks `/proc/*/fd/` to identify which
+  processes hold a file open, mirroring the Windows Restart-Manager modal from
+  BUG-004 (informational on Linux since unlink succeeds with open holders).
+  (TASK-007-K / LATER-008b.)
+- TUI snapshot test harness — `tests/snapshot_test.rs` renders the App into
+  ratatui's `TestBackend` and diffs against committed text baselines under
+  `docs/ui-baselines/snapshots/`. Regenerate with `XDU_BLESS_SNAPSHOTS=1`.
+  (TASK-007-F / LATER-004.)
+- `cargo-llvm-cov` coverage tooling — installed in the test image; new
+  `scripts/coverage.sh` writes `coverage.lcov` and prints a summary. Test
+  functions named `sec_uc*` renamed to `test_sec_uc*` for naming consistency.
+  (TASK-007-G / LATER-006.)
+
 ### Changed
 - Repo conventions aligned with the `ratushnyi-labs` org: LICENSE copyright holder,
   `Cargo.toml` metadata (`repository`, `homepage`, `authors`), standard

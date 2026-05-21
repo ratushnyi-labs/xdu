@@ -627,7 +627,7 @@ mod tests {
     }
 
     #[test]
-    fn sec_uc001_max_errors_cap_does_not_grow_unbounded() {
+    fn test_sec_uc001_max_errors_cap_does_not_grow_unbounded() {
         let td = TempDir::new();
         let opts = ScanOpts {
             max_errors: 0,

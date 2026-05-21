@@ -128,6 +128,10 @@ the human-attacker substitution.
 | 2026-05-06          | _"fo"_ — interpreted as `go` (typo of the offered approval option, matches the pattern of recent typos: `qnd`, `tet=rmination`, `mackine`). Executing wave 2 (N1…N5) and pausing before wave 3. CRR-1: if interpretation is wrong, reply `stop` and I will revert. |
 | 2026-05-06          | _"retry"_ — resume N5 (README rewrite); the prior turn announced N5 but stopped before writing the file. |
 | 2026-05-06          | _"go"_ — Docker is back up; running wave-2 verification (fmt + clippy + test + scripts/build.sh smoke) and committing on green. |
+| 2026-05-06          | _"go"_ — Wave 3 (B/C/D/M) executed. Committed `ff020a0`. |
+| 2026-05-06          | _"go"_ — Wave 4 (N6/N8a/N8b/I/N7/N9) executed. Committed `2861ab6`. Multi-target verification deferred to TASK-007-O. |
+| 2026-05-21          | _"go"_ — proceeding to wave 5 (F/G/H/J/K/L: TUI snapshot, llvm-cov, Windows drives, trash, Linux lock-holder, macOS/BSD free-space). |
+| 2026-05-21          | Wave 5 complete: all 6 leaves DONE. 97 unit + 6 integration + 3 snapshot = 106 tests pass. Apple-darwin / windows-msvc cross-build verification still deferred to TASK-007-O. |
 
 ## Refined Description
 

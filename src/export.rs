@@ -236,20 +236,20 @@ mod tests {
     // shared `format_iso8601_utc` helper now lives in `src/format.rs`.
 
     #[test]
-    fn sec_uc006_rejects_nul_in_path() {
+    fn test_sec_uc006_rejects_nul_in_path() {
         let r = validate_path(Path::new("foo\0bar"));
         assert!(r.is_err());
     }
 
     #[test]
-    fn sec_uc006_rejects_parent_segment() {
+    fn test_sec_uc006_rejects_parent_segment() {
         let r = validate_path(Path::new("a/../b"));
         assert!(r.is_err());
     }
 
     #[cfg(unix)]
     #[test]
-    fn sec_uc006_rejects_proc_sys_dev() {
+    fn test_sec_uc006_rejects_proc_sys_dev() {
         assert!(validate_path(Path::new("/proc/foo")).is_err());
         assert!(validate_path(Path::new("/sys/x")).is_err());
         assert!(validate_path(Path::new("/dev/null")).is_err());

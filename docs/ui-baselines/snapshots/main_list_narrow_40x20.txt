@@ -1,0 +1,20 @@
+ fixture-root                           
+..                                      
+beta.bin  #######       4.8 MiB         
+gamma.l…  ##            1.4 MiB         
+alpha/    #             781 KiB         
+                                        
+                                        
+                                        
+                                        
+                                        
+                                        
+                                        
+                                        
+                                        
+                                        
+                                        
+                                        
+                                        
+                                        
+…  e:export  d:delete  !:errors  q:quit 

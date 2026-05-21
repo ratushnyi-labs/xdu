@@ -5,8 +5,13 @@
 //! following programs are using files that need to be updated". No elevated
 //! privileges required.
 //!
-//! On Linux / macOS / BSD: returns empty for v0.1. Linux `/proc/*/fd` walking
-//! and `lsof`-equivalents are recorded for v0.2 (`LATER-008b`).
+//! On Linux: walks `/proc/*/fd/` and resolves each link with `readlink(2)`.
+//! Any entry whose target matches the canonicalised input path produces a
+//! `LockHolder { pid, name }`. The Linux unlink semantics still let the
+//! delete succeed even with open holders — the modal is purely informational.
+//!
+//! On macOS / BSD: returns empty for v0.1. macOS would require `proc_pidinfo`
+//! / `proc_pidfdinfo`; recorded for a follow-up.
 //!
 //! BR-001 invariant preserved — this module performs no writes and never
 //! terminates processes. ADR §7 explicitly permits these small `unsafe` FFI
@@ -538,7 +543,78 @@ mod platform_impl {
     }
 }
 
-#[cfg(not(windows))]
+#[cfg(target_os = "linux")]
+mod platform_impl {
+    use super::LockHolder;
+    use std::path::{Path, PathBuf};
+
+    /// Walk `/proc/<pid>/fd/` for every numeric pid directory and resolve each
+    /// FD link. Any FD whose target matches the canonicalised input path means
+    /// that pid is holding the file open. Returns deduplicated `LockHolder`s
+    /// (one per pid, even if a single process has the file open on multiple
+    /// FDs).
+    pub fn holders(path: &Path) -> Vec<LockHolder> {
+        let canonical: PathBuf = match std::fs::canonicalize(path) {
+            Ok(p) => p,
+            Err(_) => return Vec::new(),
+        };
+        let proc_dir = match std::fs::read_dir("/proc") {
+            Ok(d) => d,
+            Err(_) => return Vec::new(),
+        };
+        let mut matched_pids: Vec<u32> = Vec::new();
+        for entry in proc_dir.flatten() {
+            let Ok(name) = entry.file_name().into_string() else {
+                continue;
+            };
+            let Ok(pid) = name.parse::<u32>() else {
+                continue;
+            };
+            if process_has_open_fd(pid, &canonical) {
+                matched_pids.push(pid);
+            }
+        }
+        matched_pids
+            .into_iter()
+            .map(|pid| LockHolder {
+                pid,
+                name: read_comm(pid).unwrap_or_else(|| format!("pid {pid}")),
+            })
+            .collect()
+    }
+
+    fn process_has_open_fd(pid: u32, target: &Path) -> bool {
+        let fd_dir = format!("/proc/{pid}/fd");
+        let Ok(entries) = std::fs::read_dir(&fd_dir) else {
+            // Permission-denied is normal for other users' processes; treat
+            // unreadable /proc/<pid>/fd as "no match" rather than erroring.
+            return false;
+        };
+        for e in entries.flatten() {
+            if let Ok(linked) = std::fs::read_link(e.path()) {
+                if linked == target {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
+    fn read_comm(pid: u32) -> Option<String> {
+        let p = format!("/proc/{pid}/comm");
+        let raw = std::fs::read_to_string(p).ok()?;
+        Some(raw.trim_end_matches('\n').to_string())
+    }
+
+    pub fn force_close_handles_for_path(_path: &Path, _pids: &[u32]) -> usize {
+        // Linux has no API equivalent to Windows' DuplicateHandle(DUPLICATE_CLOSE_SOURCE)
+        // without ptrace tricks; reporting "0 closed" lets the modal fall through
+        // to a normal unlink (which Linux allows even while holders exist).
+        0
+    }
+}
+
+#[cfg(all(unix, not(target_os = "linux")))]
 mod platform_impl {
     use super::LockHolder;
     use std::path::Path;
@@ -594,6 +670,30 @@ mod tests {
             "/nope-such-file-zzz-99999"
         });
         assert_eq!(force_close_handles_for_path(&p, &[]), 0);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn holders_finds_self_when_file_is_kept_open() {
+        // Open a file and keep the handle alive; holders() should report our
+        // own pid in the result. Confirms the /proc/*/fd traversal works.
+        let p = std::env::temp_dir().join(format!(
+            "xdu-holder-self-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let f = std::fs::File::create(&p).unwrap();
+        let h = holders(&p);
+        drop(f);
+        let _ = std::fs::remove_file(&p);
+        let our_pid = std::process::id();
+        assert!(
+            h.iter().any(|x| x.pid == our_pid),
+            "expected our pid {our_pid} in holders {h:?}"
+        );
     }
 
     #[test]

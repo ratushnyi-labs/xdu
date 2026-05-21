@@ -12,6 +12,7 @@ use crate::export;
 use crate::format::{bar, format_size, format_ymd, SizeMode};
 use crate::lock_detect::{self, LockHolder};
 use crate::scanner::{scan_async, ScanError, ScanHandle, ScanOpts, ScanResult};
+use crate::trash;
 use crate::tree::{Node, NodeId, NodeKind, SortKey};
 use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 use crossterm::execute;
@@ -57,6 +58,10 @@ pub struct App {
     /// focus on `[ No ]`. Yes invokes `lock_detect::force_close_handles_for_path`
     /// then re-runs `perform_delete` on the same target.
     force_prompt: Option<ForceConfirmPrompt>,
+    /// When `true`, the `d` delete path routes through `trash::move_to_trash`
+    /// instead of `remove_file`/`remove_dir_all` (TASK-007-J). Off by default;
+    /// enabled via `--trash` on the command line.
+    trash_mode: bool,
     quit: bool,
 }
 
@@ -90,6 +95,16 @@ impl App {
         handle: ScanHandle,
         size_mode: SizeMode,
     ) -> Self {
+        Self::with_trash(root_path, opts, handle, size_mode, false)
+    }
+
+    pub fn with_trash(
+        root_path: PathBuf,
+        opts: ScanOpts,
+        handle: ScanHandle,
+        size_mode: SizeMode,
+        trash_mode: bool,
+    ) -> Self {
         let current = handle.state.lock().unwrap().tree.root();
         let mut s = Self {
             state: handle.state,
@@ -107,6 +122,7 @@ impl App {
             confirm_prompt: None,
             lock_prompt: None,
             force_prompt: None,
+            trash_mode,
             quit: false,
         };
         s.sort_current();
@@ -304,11 +320,15 @@ impl App {
             Some(NodeKind::Symlink) => "symlink",
             _ => "file",
         };
-        let message = format!(
-            "Delete {} ?\n  {}\nThis cannot be undone.",
-            kind_label,
-            path.display()
-        );
+        let (verb, tail) = if self.trash_mode {
+            (
+                "Move to trash",
+                "Trashed items can be restored from the OS trash.",
+            )
+        } else {
+            ("Delete", "This cannot be undone.")
+        };
+        let message = format!("{verb} {} ?\n  {}\n{tail}", kind_label, path.display());
         self.confirm_prompt = Some(ConfirmPrompt {
             target,
             message,
@@ -326,7 +346,9 @@ impl App {
             return;
         }
         let canonical = std::fs::canonicalize(&path).unwrap_or_else(|_| path.clone());
-        let result = if path.is_dir() {
+        let result = if self.trash_mode {
+            trash::move_to_trash(&path)
+        } else if path.is_dir() {
             std::fs::remove_dir_all(&path)
         } else {
             std::fs::remove_file(&path)
@@ -343,7 +365,11 @@ impl App {
                         ));
                     }
                 } else {
-                    let m = format!("deleted {}", canonical.display());
+                    let m = if self.trash_mode {
+                        format!("moved {} to trash", canonical.display())
+                    } else {
+                        format!("deleted {}", canonical.display())
+                    };
                     let root = self.root_path.clone();
                     let _ = self.spawn_scan(root);
                     self.status = Some(m);
@@ -586,10 +612,67 @@ pub fn run(
     handle: ScanHandle,
     size_mode: SizeMode,
 ) -> io::Result<()> {
+    run_with(root_path, opts, handle, size_mode, false)
+}
+
+pub fn run_with(
+    root_path: PathBuf,
+    opts: ScanOpts,
+    handle: ScanHandle,
+    size_mode: SizeMode,
+    trash_mode: bool,
+) -> io::Result<()> {
     let mut term = init_terminal()?;
-    let result = run_loop(&mut term, App::new(root_path, opts, handle, size_mode));
+    let result = run_loop(
+        &mut term,
+        App::with_trash(root_path, opts, handle, size_mode, trash_mode),
+    );
     teardown_terminal();
     result
+}
+
+/// Render the App into a virtual terminal at `(width, height)` and return the
+/// rendered cells as a `\n`-joined grid of symbols.
+///
+/// This is the snapshot-test surface for TASK-007-F (`LATER-004`): pair it
+/// with golden files under `docs/ui-baselines/snapshots/` to lock in TUI
+/// output. No styling/colour is captured — only cell symbols — which is
+/// sufficient to catch layout, wording, and column-width regressions while
+/// staying robust against ANSI-style choices.
+pub fn render_snapshot(app: &App, width: u16, height: u16) -> String {
+    use ratatui::backend::TestBackend;
+    let backend = TestBackend::new(width, height);
+    let mut term = Terminal::new(backend).expect("TestBackend::new infallible");
+    term.draw(|f| render(f, app))
+        .expect("TestBackend draw infallible");
+    let buf = term.backend().buffer();
+    let mut out = String::with_capacity((width as usize + 1) * height as usize);
+    for y in 0..buf.area.height {
+        for x in 0..buf.area.width {
+            out.push_str(buf[(x, y)].symbol());
+        }
+        out.push('\n');
+    }
+    out
+}
+
+/// Construct an `App` from a freshly-built tree without running the scanner.
+/// Useful for snapshot tests and for any future deterministic-fixture tests.
+///
+/// The returned App is wired to a non-running `ScanResult` (no worker thread)
+/// so the harness has no async timing to coordinate.
+pub fn app_from_tree_for_test(root_path: PathBuf, tree: crate::tree::Tree) -> App {
+    let state = Arc::new(Mutex::new(ScanResult {
+        tree,
+        errors: Vec::new(),
+        overflow_errors: false,
+        running: false,
+    }));
+    let handle = ScanHandle {
+        state,
+        join_handle: None,
+    };
+    App::new(root_path, ScanOpts::default(), handle, SizeMode::Iec)
 }
 
 fn run_loop(term: &mut Terminal<CrosstermBackend<Stdout>>, mut app: App) -> io::Result<()> {
@@ -958,13 +1041,21 @@ fn render_footer(f: &mut Frame, area: Rect, app: &App, state: &ScanResult) {
             spinner_char()
         )
     } else {
+        let delete_hint = if app.trash_mode {
+            "d:trash"
+        } else {
+            "d:delete"
+        };
         format!(
-            " sort:{}  errors:{}  ?:help  s:sort  u:unit  r:rescan  e:export  d:delete  !:errors  q:quit ",
+            " sort:{}  errors:{}  ?:help  s:sort  u:unit  r:rescan  e:export  {delete_hint}  !:errors  q:quit ",
             sort_label(app.sort),
             state.errors.len()
         )
     };
-    let right = disk_space::format_free(&app.root_path, app.size_mode);
+    let mut right = disk_space::format_free(&app.root_path, app.size_mode);
+    if app.trash_mode {
+        right = format!(" mode:trash {right}");
+    }
     let s = compose_footer(&left, &right, area.width as usize);
     let style = Style::default().add_modifier(Modifier::REVERSED);
     f.render_widget(Paragraph::new(s).style(style), area);

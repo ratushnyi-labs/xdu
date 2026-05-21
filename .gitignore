@@ -1,6 +1,8 @@
 .idea
 target
 lcov.info
+coverage.lcov
+lcov-report/
 *.profraw
 dist/
 .build/
