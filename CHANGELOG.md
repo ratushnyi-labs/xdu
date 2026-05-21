@@ -26,11 +26,14 @@ with an interactive terminal UI.
 
 ### Added
 - Scaffold: Rust workspace, MIT LICENSE, `.gitignore`/`.dockerignore`/`.editorconfig`,
-  multi-stage `Dockerfile.build`, `docker-compose.yml`, `scripts/build.sh`,
+  multi-stage `Dockerfile`, `docker-compose.yml`, `scripts/build.sh`,
   `scripts/ci.sh`, `Cargo.lock`. (`TASK-001-C`)
-- Multi-target Docker build pipeline: `x86_64-unknown-linux-musl`,
-  `aarch64-unknown-linux-musl`, `x86_64-pc-windows-gnu`. Size budget 1.5 MiB
-  enforced. (`TASK-001-D`)
+- Multi-target Docker build pipeline (6 targets): `x86_64-unknown-linux-musl`,
+  `aarch64-unknown-linux-musl`, `x86_64-pc-windows-msvc`,
+  `aarch64-pc-windows-msvc`, `x86_64-apple-darwin`, `aarch64-apple-darwin`.
+  MSVC targets cross-compile via `cargo-xwin`; Apple targets via
+  `cargo-zigbuild`. Size budget 1.5 MiB enforced.
+  (`TASK-001-D`, `TASK-007-N8a`, `TASK-007-N8b`, `TASK-007-I`)
 - Size formatter (`format_size`) and proportion-bar generator (`bar`) with
   IEC / SI modes and UTF-8 / ASCII fallback. (`TASK-001-G`)
 - Tree model: arena-backed `Vec<Node>` indexed by `NodeId(u32)`, stable sort

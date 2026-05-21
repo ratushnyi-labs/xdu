@@ -7,10 +7,10 @@ set -eu
 
 cd "$(dirname "$0")/.."
 
-TARGETS="${TARGETS:-x86_64-unknown-linux-musl aarch64-unknown-linux-musl x86_64-pc-windows-gnu}"
+TARGETS="${TARGETS:-x86_64-unknown-linux-musl aarch64-unknown-linux-musl x86_64-pc-windows-msvc aarch64-pc-windows-msvc x86_64-apple-darwin aarch64-apple-darwin}"
 SIZE_CEILING_BYTES="${SIZE_CEILING_BYTES:-1572864}" # 1.5 MiB
 
-mkdir -p out
+mkdir -p dist
 
 failed=""
 oversize=""
@@ -32,7 +32,7 @@ for t in $TARGETS; do
         *)         ext="" ;;
     esac
 
-    bin="out/$t/xdu$ext"
+    bin="dist/$t/xdu$ext"
     if [ ! -f "$bin" ]; then
         printf '    [error] expected binary not found: %s\n' "$bin"
         failed="$failed $t"

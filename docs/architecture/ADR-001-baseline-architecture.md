@@ -105,20 +105,26 @@ as v0.1.0 baseline.
 |---------------------|---------------------------------------------------------------------------|
 | Toolchain location  | Inside Docker (lawbook §8.2 — host isolation)                             |
 | Builder image       | Multi-stage; `rust:1.x-alpine` (stage `build`); per-target images for cross|
-| Targets v0.1.0      | `x86_64-unknown-linux-musl`, `aarch64-unknown-linux-musl`, `x86_64-pc-windows-gnu` (chosen over MSVC for fully containerized builds via `mingw-w64`), `x86_64-apple-darwin` + `aarch64-apple-darwin` (via `osxcross` toolchain image; documented limitation: macOS link to libSystem cannot be fully static — accepted) |
+| Targets v0.1.0      | 6-target matrix: `x86_64-unknown-linux-musl`, `aarch64-unknown-linux-musl`, `x86_64-pc-windows-msvc`, `aarch64-pc-windows-msvc`, `x86_64-apple-darwin`, `aarch64-apple-darwin`. Windows cross-compiled from Linux Docker via `cargo-xwin` (Microsoft MSVC SDK). Apple cross-compiled via `cargo-zigbuild` (zig-bundled libSystem stubs). See TASK-007-N8a/N8b/I for the switch from the original gnu+osxcross plan. |
 | Profile             | `release-min`: `opt-level="z"`, `lto="fat"`, `codegen-units=1`, `panic="abort"`, `strip="symbols"`, `incremental=false` |
 | Linker              | `mold` (Linux) for build speed; `ld` final pass for size determinism      |
-| Output              | `/out/<target>/xdu(.exe)` extracted via `docker compose run --rm build`   |
+| Output              | `dist/<target>/xdu(.exe)` extracted via `docker compose run --rm build`   |
 | Reproducibility     | Pin Rust toolchain via `rust-toolchain.toml`; lock all crate versions     |
 | CI simulation (§8.7)| `scripts/ci.sh` running typecheck → lint (`clippy -D warnings`) → unit → integration → TUI snapshot → multi-target release builds → security & dep audit (`cargo-audit`, `cargo-deny`) |
 | HEALTHCHECK in image| N/A (build image, not runtime)                                            |
 | Production stage    | `scratch` (final binary only) per §8.4 — distroless / scratch is preferred |
 | `.dockerignore`     | required                                                                  |
 
-Note on Windows target: `x86_64-pc-windows-gnu` chosen for v0.1.0 to keep all builds inside
-Linux Docker (no Windows host needed). MSVC + `+crt-static` is recorded as an alternative
-to be evaluated in TASK-001-D if `gnu` target produces measurably larger binaries or
-compatibility issues; switching is a non-blocking optimization.
+Note on Windows target (revised 2026-05-21 per TASK-007-N8a): the Windows target is
+`x86_64-pc-windows-msvc` (+ `aarch64-pc-windows-msvc`), cross-compiled from Linux Docker
+via [`cargo-xwin`](https://github.com/rust-cross/cargo-xwin). xwin downloads Microsoft's
+MSVC headers and import libraries at image build time (acceptance of Microsoft's MSVC
+EULA is recorded programmatically via `xwin --accept-license`). This supersedes the
+v0.1.0-draft choice of `x86_64-pc-windows-gnu` + `mingw-w64`; the rationale was to align
+with the broader Rust-on-Windows ecosystem (most pre-built crates ship MSVC ABI), to gain
+ARM64 Windows support for free, and to keep all 6 targets buildable from the same Linux
+Docker image. Apple targets follow the same Linux-Docker-only philosophy via
+`cargo-zigbuild`, replacing the originally-planned `osxcross` toolchain.
 
 ## 6. Test architecture
 

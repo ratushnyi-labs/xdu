@@ -4,7 +4,7 @@
 
 ## Checklist
 
-- [ ] Tests pass (`docker compose run --rm dev sh -c "cargo fmt --all -- --check && cargo clippy --all-targets --all-features --locked -- -D warnings && cargo test --locked"`)
+- [ ] Tests pass (`docker compose run --rm test sh -c "cargo fmt --all -- --check && cargo clippy --all-targets --all-features --locked -- -D warnings && cargo test --locked"`)
 - [ ] Multi-target release build succeeds (`sh scripts/build.sh`)
 - [ ] No `unsafe` code without a `// SAFETY:` comment
 - [ ] BR-001 read-only invariant preserved (mutating paths: only `d` delete + `f` force-close, both gated by their confirmation modals)

@@ -1,0 +1,143 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  # =============================================================================
+  # Gate 1: same containerised fmt + clippy + test gate as CI.
+  # =============================================================================
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: fmt + clippy + test
+        run: |
+          docker compose run --build --rm test sh -c '
+            set -eu
+            cargo fmt --all -- --check
+            cargo clippy --all-targets --locked -- -D warnings
+            cargo test --all --locked
+          '
+
+  # =============================================================================
+  # Gate 2: per-target release build on native runners.
+  # =============================================================================
+  build:
+    needs: test
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-musl
+            os: ubuntu-latest
+            cross: zig
+            ext: ""
+          - target: aarch64-unknown-linux-musl
+            os: ubuntu-latest
+            cross: zig
+            ext: ""
+          - target: x86_64-apple-darwin
+            os: macos-13
+            cross: none
+            ext: ""
+          - target: aarch64-apple-darwin
+            os: macos-14
+            cross: none
+            ext: ""
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+            cross: none
+            ext: ".exe"
+          - target: aarch64-pc-windows-msvc
+            os: windows-latest
+            cross: none
+            ext: ".exe"
+
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - if: matrix.cross == 'zig'
+        uses: mlugg/setup-zig@v2
+      - if: matrix.cross == 'zig'
+        uses: taiki-e/install-action@cargo-zigbuild
+
+      - name: Build release
+        shell: bash
+        run: |
+          set -eu
+          if [[ "${{ matrix.cross }}" == "zig" ]]; then
+            cargo zigbuild --release --target ${{ matrix.target }} --locked
+          else
+            cargo build --release --target ${{ matrix.target }} --locked
+          fi
+
+      - name: Stage artifact
+        shell: bash
+        run: |
+          set -eu
+          SRC="target/${{ matrix.target }}/release/xdu${{ matrix.ext }}"
+          mkdir -p "stage/${{ matrix.target }}"
+          cp "$SRC" "stage/${{ matrix.target }}/"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: xdu-${{ matrix.target }}
+          path: stage/${{ matrix.target }}/
+          retention-days: 7
+
+  # =============================================================================
+  # Gate 3: package + create GitHub Release with 6 assets.
+  # =============================================================================
+  release:
+    needs: [test, build]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          pattern: xdu-*
+          merge-multiple: false
+
+      - name: Package release artifacts
+        shell: bash
+        run: |
+          set -eu
+          mkdir -p dist
+          cd artifacts
+          for d in xdu-*; do
+            [ -d "$d" ] || continue
+            target="${d#xdu-}"
+            case "$target" in
+              *windows*)
+                # Each artifact dir holds xdu.exe; produce xdu-<target>.zip.
+                (cd "$d" && zip -j "../../dist/xdu-${target}.zip" xdu.exe)
+                ;;
+              *)
+                # Unix: tar.gz containing the bare xdu binary.
+                chmod +x "$d/xdu" || true
+                tar -C "$d" -czf "../dist/xdu-${target}.tar.gz" xdu
+                ;;
+            esac
+          done
+          cd ..
+          ls -lh dist/
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/*.tar.gz
+            dist/*.zip
+          generate_release_notes: true
+          draft: false
+          prerelease: false

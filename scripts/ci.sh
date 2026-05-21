@@ -7,7 +7,7 @@ set -eu
 cd "$(dirname "$0")/.."
 
 dev() {
-    docker compose run --rm -T dev "$@"
+    docker compose run --rm -T test "$@"
 }
 
 printf '\n==> [1/5] cargo fmt --check\n'

@@ -93,13 +93,13 @@ TARGET=x86_64-unknown-linux-musl docker compose run --rm build
 sh scripts/build.sh
 ```
 
-Output: `out/<TARGET>/xdu(.exe)`. Each binary is checked against a 1.5 MiB hard
+Output: `dist/<TARGET>/xdu(.exe)`. Each binary is checked against a 1.5 MiB hard
 ceiling (configurable via `SIZE_CEILING_BYTES` in `.env`).
 
 ## Testing
 
 ```sh
-docker compose run --rm dev sh -c "\
+docker compose run --rm test sh -c "\
   cargo fmt --all -- --check \
   && cargo clippy --all-targets --all-features --locked -- -D warnings \
   && cargo test --locked"

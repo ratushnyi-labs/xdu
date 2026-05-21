@@ -35,7 +35,7 @@ the `!` keybinding in the TUI.
 | `NO_COLOR`  | If set to any non-empty value, disables ANSI color output. Honored via ratatui.     |
 | `LANG`, `LC_ALL`, `LC_CTYPE` | Inspected for the substrings `UTF-8` / `UTF8`. If found, UTF-8 block-element bars render; otherwise the ASCII (`#` / space) fallback is used. |
 | `TERM`      | Honored by `crossterm` for terminal capability detection.                            |
-| `TARGET`    | (Build-time only.) Selects the Rust target triple in `Dockerfile.build` and `scripts/build.sh`. |
+| `TARGET`    | (Build-time only.) Selects the Rust target triple in `Dockerfile` and `scripts/build.sh`. |
 | `SIZE_CEILING_BYTES` | (Build-time only.) Overrides the default 1.5 MiB binary-size hard ceiling. |
 
 `xdu` does **not** read any environment variable for telemetry, network,
@@ -91,8 +91,8 @@ or update checking — it makes no network calls anywhere.
 ## Build-time budgets (ADR-001 §5)
 
 - Hard ceiling: **1.5 MiB** per stripped target binary. Configurable via `SIZE_CEILING_BYTES`.
-- Target: < **1.0 MiB**. Achieved (v0.1.0): musl-x86_64 ≈ 675 KiB, musl-aarch64 ≈ 608 KiB, windows-gnu-x86_64 ≈ 476 KiB.
-- Profile: `release-min` (`opt-level="z"`, `lto="fat"`, `codegen-units=1`, `panic="abort"`, `strip="symbols"`).
+- Target: < **1.0 MiB**. Reference measurements from early v0.1.0 (gnu Windows): musl-x86_64 ≈ 675 KiB, musl-aarch64 ≈ 608 KiB, windows-gnu-x86_64 ≈ 476 KiB. v0.1.0 ships with windows-msvc + apple-darwin via cargo-xwin/zigbuild; expected sizes recorded in the release notes.
+- Profile: `release` (`opt-level="z"`, `lto=true`, `codegen-units=1`, `panic="abort"`, `strip=true`).
 - No new crate dependencies without an ADR amendment.
 
 ## What `xdu` will NEVER do

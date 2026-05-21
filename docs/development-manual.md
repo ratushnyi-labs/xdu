@@ -14,13 +14,14 @@ That is the entire host footprint.
 ## One-shot dev container
 
 ```sh
-docker compose run --rm dev sh
+docker compose run --rm test sh
 ```
 
 Drops you into a shell at `/src` with the pinned Rust toolchain
-(`rust:1.95-bookworm`), all three rustup targets, `cargo`, `clippy`,
-and `rustfmt` already installed. Cargo registry and `target/` are kept
-in named volumes so subsequent builds reuse cached crates.
+(`rust:1.95-bookworm`), all six rustup targets, `cargo`, `clippy`,
+`rustfmt`, `cargo-xwin`, `cargo-zigbuild`, and a splatted MSVC SDK
+under `/xwin` ready to go. Cargo registry and `target/` are kept in
+named volumes so subsequent builds reuse cached crates.
 
 ## Common commands inside the dev shell
 
@@ -43,7 +44,7 @@ sh scripts/build.sh     # release-min build for every supported target
 TARGET=x86_64-unknown-linux-musl docker compose run --rm build  # single target
 ```
 
-Outputs land in `out/<TARGET>/xdu(.exe)`. Each binary is checked against
+Outputs land in `dist/<TARGET>/xdu(.exe)`. Each binary is checked against
 the **1.5 MiB hard ceiling** (configurable via `SIZE_CEILING_BYTES`,
 see [`.env.example`](../.env.example)). Build fails if any target exceeds it.
 
@@ -53,7 +54,7 @@ see [`.env.example`](../.env.example)). Build fails if any target exceeds it.
 |------------------|---------------------------------------------------------------|
 | `.dev-data/`     | Reserved for dev-only data volumes (currently unused by xdu). |
 | `.dev-temp/`     | Reserved for build-time scratch (currently unused by xdu).    |
-| `out/`           | Released binaries (per-target). Git-ignored.                  |
+| `dist/`          | Released binaries (per-target). Git-ignored.                  |
 | `target/`        | Cargo's build cache. Git-ignored. Lives in a Docker volume.   |
 
 ## Workflow
@@ -64,7 +65,7 @@ see [`.env.example`](../.env.example)). Build fails if any target exceeds it.
 3. Implement code + tests inside the dev container.
 4. Run the verifier:
    ```sh
-   docker compose run --rm dev sh -c \
+   docker compose run --rm test sh -c \
      "cargo fmt --all && cargo fmt --all -- --check \
       && cargo clippy --all-targets --all-features --locked -- -D warnings \
       && cargo test --locked"

@@ -18,7 +18,7 @@ Contributions are welcome. This document describes how to contribute effectively
 4. Run the dev verifier:
 
    ```sh
-   docker compose run --rm dev sh -c "cargo fmt --all -- --check \
+   docker compose run --rm test sh -c "cargo fmt --all -- --check \
      && cargo clippy --all-targets --all-features --locked -- -D warnings \
      && cargo test --locked"
    ```

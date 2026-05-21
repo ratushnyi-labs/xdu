@@ -5,16 +5,17 @@ no daemon, no shared library. Drop the binary anywhere on `PATH` and run it.
 
 ## Supported platforms (v0.1.0)
 
-| Target triple                        | OS                              | Distribution form          |
-|--------------------------------------|---------------------------------|----------------------------|
-| `x86_64-unknown-linux-musl`          | Linux x86_64                    | Fully static ELF (musl)    |
-| `aarch64-unknown-linux-musl`         | Linux aarch64 (ARM64)           | Fully static ELF (musl)    |
-| `x86_64-pc-windows-gnu`              | Windows x86_64                  | PE32+ console executable   |
+| Target triple                        | OS                              | Distribution form               |
+|--------------------------------------|---------------------------------|---------------------------------|
+| `x86_64-unknown-linux-musl`          | Linux x86_64                    | Fully static ELF (musl)         |
+| `aarch64-unknown-linux-musl`         | Linux aarch64 (ARM64)           | Fully static ELF (musl)         |
+| `x86_64-apple-darwin`                | macOS Intel                     | Mach-O 64-bit (libSystem)       |
+| `aarch64-apple-darwin`               | macOS Apple Silicon             | Mach-O 64-bit (libSystem)       |
+| `x86_64-pc-windows-msvc`             | Windows x86_64                  | PE32+ console (MSVC CRT)        |
+| `aarch64-pc-windows-msvc`            | Windows ARM64                   | PE32+ console (MSVC CRT)        |
 
-macOS and *BSD targets are recorded as v0.2 follow-ups in
-[`docs/spec.md`](spec.md) §9 (LATER-005). Build from source on macOS via
-the host Rust toolchain — the same `cargo build --profile release-min`
-invocation used by the Docker pipeline works.
+Other targets (*BSD, RISC-V Linux, etc.) are recorded as v0.2 follow-ups in
+[`docs/spec.md`](spec.md) §9 (LATER-005).
 
 ## Install
 
@@ -37,16 +38,18 @@ version — verified to run inside `alpine:3.20` (which has only musl).
 ANSI colors require a terminal that handles VT escapes — Windows Terminal,
 modern PowerShell, or Windows console host with VT processing enabled.
 
-### macOS (build from source)
+### macOS
 
-1. Install Rust via `rustup` (host toolchain — note this is a deviation
-   from the Docker-only project rule, accepted for macOS until osxcross
-   automation lands in v0.2).
-2. From the project root:
+1. Place `xdu` somewhere on `PATH` (e.g. `~/.local/bin/xdu` or
+   `/usr/local/bin/xdu`):
    ```sh
-   cargo build --profile release-min
+   chmod +x xdu
+   sudo mv xdu /usr/local/bin/xdu
+   xdu --version
    ```
-3. Binary at `target/release-min/xdu`.
+2. On Apple Silicon download `aarch64-apple-darwin`; on Intel macs download
+   `x86_64-apple-darwin`. Both link against the system `libSystem` so they
+   run on any macOS 11+ host.
 
 ## First-use sanity check
 
