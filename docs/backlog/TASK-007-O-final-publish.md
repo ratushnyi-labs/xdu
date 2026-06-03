@@ -100,6 +100,21 @@ advisory-approval surfacing — both supervisor-inline work.
 | 2026-06-03 | DEV  | Pre-publish verification gate (Step 1 of Speck) | SUCCESS | 4/4 gates green inside Docker (fmt clean, clippy `-D warnings` clean, `cargo test --all --locked` 106/106, `cargo audit` exit 0 with the 2 known informational warnings RUSTSEC-2024-0436 + RUSTSEC-2026-0002 unchanged from P); transcript at `docs/audits/pre-publish-verification-2026-06-03.md`; READY-FOR-USER-APPROVAL for Step 2 |
 | 2026-06-03 | DEV | Step 3: CHANGELOG flip [Unreleased] -> [0.1.0] - 2026-06-03 | SUCCESS | User verbatim approval quoted in commit message; new empty Unreleased section seeded |
 | 2026-06-03 | DEV | Step 3 follow-up: merge duplicate [0.1.0] sections | SUCCESS | User verbatim: "Merge into one [0.1.0] - 2026-06-03 (Recommended)". 2026-05-06 section folded into 2026-06-03; entries grouped Added/Changed/Fixed/Security. |
+| 2026-06-03 | DEV | Step post-1d: Cargo.toml description sync | SUCCESS | User verbatim quoted in commit; pre-DONE gate fmt+clippy+test 106/106 clean inside Docker |
+
+## CRR-3 Publish Log
+
+Per Speck SEC-6, each CRR-3 confirmation is quoted verbatim:
+
+| # | Action | User verbatim answer | Result |
+|---|--------|----------------------|--------|
+| pre-1 | Repo creation (`gh repo create ratushnyi-labs/xdu --private ...`) — new gate not in Speck; surfaced as a precondition for AC-5/AC-6 | _"Create as PRIVATE first, then flip to public after first push"_ | Repo created PRIVATE 2026-06-03T13:38:33Z at `https://github.com/ratushnyi-labs/xdu`. SSH remote `origin` wired. |
+| AC-5 | `git push -u origin main` (push #1 — 19 commits) | _"Push commits (Recommended)"_ | Pushed at 2026-06-03T13:39:32Z; HEAD = `f370f71`. Branch `main` set to track `origin/main`. |
+| post-1 | Visibility flip PRIVATE → PUBLIC | _"Stay PRIVATE for now"_ | NO-OP. Repo remains PRIVATE; v0.1.0 release page will be org-member-visible only until user revisits. |
+| post-1b | Re-surfacing visibility flip after workflow completes? | _"keep it private by now"_ (2026-06-03, after tag push) | NO-OP. Supervisor will NOT re-surface the visibility-flip question at workflow completion. Repo stays PRIVATE indefinitely until user explicitly re-opens the question. |
+| post-1c | Repo topics + description polish | _"qdd tqgs, description to repo https://github.com/ratushnyi-labs/xdu"_ — interpreted as "add tags, description". Reversible action; not CRR-3. Source: `Cargo.toml` `keywords` + `categories`. | Topics applied: `cli`, `command-line`, `disk-usage`, `filesystem`, `ncdu`, `rust`, `terminal`, `tui` (8 tags). Description: `Read-only disk-usage explorer with terminal UI` (unchanged, set at creation). Homepage: `https://github.com/ratushnyi-labs/xdu` (set at creation). |
+| post-1d | Description accuracy review | _"Read-only disk-usage explorer with terminal UI - seems to be not fully correct."_ (2026-06-03) — user flags current description as eliding the opt-in delete/trash/force-close paths added in TASK-005, TASK-006, TASK-007-J. | Pending — supervisor surfacing revised options via AskUserQuestion; will update both GitHub repo description AND `Cargo.toml` `description` for consistency. Cargo.toml update lands as a separate commit on `main` (after v0.1.0 tag), going out in the next release; v0.1.0 keeps the original wording in its tag/release notes. |
+| AC-6 | `git push origin v0.1.0` (push #2 — annotated tag) | _"Push tag and fire release.yml (Recommended)"_ | Tag pushed at 2026-06-03T13:40:38Z. Workflow run `26888633897` queued + in_progress; Monitor `bscl4vs41` armed for per-job state transitions. |
 
 ## Compliance Notes — §9.5
 
