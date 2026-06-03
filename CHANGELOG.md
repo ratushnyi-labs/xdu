@@ -15,6 +15,9 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [0.1.0] - 2026-06-03
 
+Initial release. Single static binary per platform, read-only disk-usage explorer
+with an interactive terminal UI.
+
 ### Added
 - `--trash` flag — move deleted items to the OS-native trash instead of
   permanently deleting them. Linux follows the freedesktop.org Trash spec v1.0
@@ -39,25 +42,6 @@ project adheres to [Semantic Versioning](https://semver.org/).
   `scripts/coverage.sh` writes `coverage.lcov` and prints a summary. Test
   functions named `sec_uc*` renamed to `test_sec_uc*` for naming consistency.
   (TASK-007-G / LATER-006.)
-
-### Changed
-- Repo conventions aligned with the `ratushnyi-labs` org: LICENSE copyright holder,
-  `Cargo.toml` metadata (`repository`, `homepage`, `authors`), standard
-  `[profile.release]` replacing the custom `release-min` profile, simpler
-  `.gitignore` / `.gitattributes` / `.dockerignore`, `.env` for §8.1 compliance.
-- Added `.github/` tree: `CODEOWNERS`, `SECURITY.md`, `PULL_REQUEST_TEMPLATE.md`,
-  three `ISSUE_TEMPLATE/*.yml`. (TASK-007 / wave 2.)
-- Added `CONTRIBUTING.md` describing dev setup, workflow, code style, safety rules,
-  testing requirements, commit-message convention, and PR checklist.
-- README restructured to the org pattern: centered hero, three-badge row, supported
-  targets table, documentation table, multilingual user-manual stub.
-
-## [0.1.0] - 2026-05-06
-
-Initial release. Single static binary per platform, read-only disk-usage explorer
-with an interactive terminal UI.
-
-### Added
 - Scaffold: Rust workspace, MIT LICENSE, `.gitignore`/`.dockerignore`/`.editorconfig`,
   multi-stage `Dockerfile`, `docker-compose.yml`, `scripts/build.sh`,
   `scripts/ci.sh`, `Cargo.lock`. (`TASK-001-C`)
@@ -104,6 +88,16 @@ with an interactive terminal UI.
   foreign handle. (`TASK-006`)
 
 ### Changed
+- Repo conventions aligned with the `ratushnyi-labs` org: LICENSE copyright holder,
+  `Cargo.toml` metadata (`repository`, `homepage`, `authors`), standard
+  `[profile.release]` replacing the custom `release-min` profile, simpler
+  `.gitignore` / `.gitattributes` / `.dockerignore`, `.env` for §8.1 compliance.
+- Added `.github/` tree: `CODEOWNERS`, `SECURITY.md`, `PULL_REQUEST_TEMPLATE.md`,
+  three `ISSUE_TEMPLATE/*.yml`. (TASK-007 / wave 2.)
+- Added `CONTRIBUTING.md` describing dev setup, workflow, code style, safety rules,
+  testing requirements, commit-message convention, and PR checklist.
+- README restructured to the org pattern: centered hero, three-badge row, supported
+  targets table, documentation table, multilingual user-manual stub.
 - Scanner moved to an asynchronous worker thread; the TUI opens immediately and
   renders an animated spinner in the size column for non-finalized rows. Eager
   bubble-up aggregation surfaces partial sums mid-scan. (`BUG-002`)
