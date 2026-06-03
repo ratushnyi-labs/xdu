@@ -8,6 +8,14 @@ project adheres to [Semantic Versioning](https://semver.org/).
 ## [Unreleased]
 
 ### Added
+
+### Changed
+
+### Fixed
+
+## [0.1.0] - 2026-06-03
+
+### Added
 - `--trash` flag — move deleted items to the OS-native trash instead of
   permanently deleting them. Linux follows the freedesktop.org Trash spec v1.0
   (`$XDG_DATA_HOME/Trash` with `.trashinfo` sidecars). Windows uses
