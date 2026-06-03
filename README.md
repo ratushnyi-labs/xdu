@@ -119,12 +119,14 @@ docker compose run --rm test sh -c "\
 
 | Language     | File |
 |--------------|------|
-| English      | _coming in TASK-007-N10_ |
-| Українська   | _coming in TASK-007-N10_ |
-| Español      | _coming in TASK-007-N10_ |
-| Français     | _coming in TASK-007-N10_ |
-| Italiano     | _coming in TASK-007-N10_ |
-| Português    | _coming in TASK-007-N10_ |
+| English      | [docs/user-manual-en.md](docs/user-manual-en.md) |
+| Українська   | [docs/user-manual-ua.md](docs/user-manual-ua.md) |
+| Español      | [docs/user-manual-es.md](docs/user-manual-es.md) |
+| Français     | [docs/user-manual-fr.md](docs/user-manual-fr.md) |
+| Italiano     | [docs/user-manual-it.md](docs/user-manual-it.md) |
+| Português    | [docs/user-manual-pt.md](docs/user-manual-pt.md) |
+
+Non-English manuals are machine translations for v0.1.0, pending human review.
 
 ## Contributing
 
