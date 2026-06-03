@@ -1,6 +1,6 @@
 # TASK-007-O — Final pre-publish gate + tag v0.1.0 + push + GH release
 
-**Status:** IN PROGRESS  **Type:** TASK  **Parent:** TASK-007
+**Status:** DONE  **Type:** TASK  **Parent:** TASK-007
 **User Mode:** GUIDED  **Guided Flow Stage:** BUILD
 **Priority:** MEDIUM
 **Atomic Check:** ATOMIC — the publish sequence is a single interlocked
@@ -102,6 +102,7 @@ advisory-approval surfacing — both supervisor-inline work.
 | 2026-06-03 | DEV | Step 3 follow-up: merge duplicate [0.1.0] sections | SUCCESS | User verbatim: "Merge into one [0.1.0] - 2026-06-03 (Recommended)". 2026-05-06 section folded into 2026-06-03; entries grouped Added/Changed/Fixed/Security. |
 | 2026-06-03 | DEV | Step post-1d: Cargo.toml description sync | SUCCESS | User verbatim quoted in commit; pre-DONE gate fmt+clippy+test 106/106 clean inside Docker |
 | 2026-06-03 | DEV | Patch release.yml x86_64-apple-darwin → ubuntu-latest + zigbuild | SUCCESS | Mirrors musl-target pattern; rationale comment added; commit hash on completion |
+| 2026-06-03 | DEV | AC-8 post-release housekeeping (CHANGELOG release URL + parent backlog status flip) | SUCCESS | Release URL appended to CHANGELOG.md [0.1.0] link reference + Unreleased compare URL; parent backlog status flipped to DONE with v0.1.0 outcome section added |
 
 ## CRR-3 Publish Log
 
@@ -119,6 +120,7 @@ Per Speck SEC-6, each CRR-3 confirmation is quoted verbatim:
 | post-1f | macos-13 cancellation reconsidered | _"maybe cancel mac os intel?"_ (2026-06-03) — supervisor explained that cancelling kills the GitHub Release entirely (release job has `needs: [test, build]` with no `if: always()`, so cancellation skips it); 4 options surfaced; user re-confirmed _"Wait it out (still recommended)"_ | NO-OP. Same standing direction. Workflow continues; supervisor will re-surface on monitor timeout or workflow completion. |
 | post-1g | Monitor `bscl4vs41` timed out after 40 min — macos-13 still queued | Standing user direction from `post-1e`/`post-1f`: wait. No new question asked. | Re-armed monitor `bd8y045zr` for another 40-min window. If macos-13 still hasn't picked up at this monitor's timeout, supervisor will surface a decision turn (the "wait further OR pivot" question can't keep getting silently re-armed indefinitely). |
 | post-1h | Workflow run 26888633897 → conclusion `cancelled` | _Workflow state observed via monitor `bd8y045zr` events at 14:30:21Z_: `build (x86_64-apple-darwin, macos-13) completed cancelled` + `release completed cancelled` + `WORKFLOW DONE: cancelled`. User verbatim on source: _"i cancelled it. 45 minutes waiting is noncence"_ — user-initiated cancel via GitHub UI in response to the macos-13 queue stall. `gh release view v0.1.0 → release not found`. v0.1.0 tag still pinned at `f370f71` on `origin`. 5/6 build jobs succeeded; their binaries are workflow artifacts only (90-day retention), NOT attached to any release. | Recovery direction still pending — supervisor re-surfacing the 3 recovery paths via AskUserQuestion. |
+| post-1i | Recovery path picked + executed | _"Patch workflow then re-tag v0.1.0 to the new SHA"_ — option-3 selected with full description awareness; supervisor treats this as the bundled CRR-3 confirmation for: (a) push patch commit, (b) delete remote v0.1.0 tag, (c) delete local v0.1.0 tag, (d) recreate v0.1.0 at new SHA, (e) push new tag. | DONE. DEV patched release.yml (commit `e260fe0`, x86_64-apple-darwin now `ubuntu-latest` + `cross: zig` like the musl entries). Supervisor: pushed `e260fe0` to `origin/main` (`693893e..e260fe0`); deleted remote v0.1.0 (`- [deleted] v0.1.0`); deleted local v0.1.0 (`Deleted tag 'v0.1.0' (was bb4e524)`); recreated annotated v0.1.0 on `e260fe0` (SHA `569f83f`); pushed new tag (`* [new tag] v0.1.0 -> v0.1.0`). Fresh release run `26891916491` started at `14:35:54Z`. Monitor `bzn1qrtvu` re-armed (40-min window). |
 | AC-6 | `git push origin v0.1.0` (push #2 — annotated tag) | _"Push tag and fire release.yml (Recommended)"_ | Tag pushed at 2026-06-03T13:40:38Z. Workflow run `26888633897` queued + in_progress; Monitor `bscl4vs41` armed for per-job state transitions. |
 
 ## Compliance Notes — §9.5

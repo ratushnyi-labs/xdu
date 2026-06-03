@@ -1,6 +1,6 @@
 # TASK-007 — prepare app for MIT-license publishing under ratushnyi-labs
 
-**Status:** REFINED → ESTIMATED → DECOMPOSED (in progress this turn)
+**Status:** DONE
 **Type:** TASK
 **Entry Mode:** CODE_FIRST (existing codebase; polish + publishing prep)
 **User Mode:** GUIDED
@@ -136,6 +136,7 @@ the human-attacker substitution.
 | 2026-06-03          | _"go"_ — drain remaining backlog per §1.2.12. New leaves added: P (audit + llvm-cov baseline), Q (cross-build smoke-test), R (parent Speck + stealth-identity audit). Switching from inline execution to supervisor-subagent model (§1.2 + §1.2.13) for all remaining leaves. Stop directive: AT_BACKLOG_DRAIN; CRR-3 halt scheduled at O (push to public remote). |
 | 2026-06-03          | P DONE (`f5a9d78`) — clean cargo-audit (2 informational warnings flagged for O gate), coverage baseline 74.06% (no fail-under gate added). Q DONE (`8ef9fa1`) — smoke-test caught BUG-005 (xwin 0.9.0 CLI break). BUG-005 DONE (`66ea297`) — 6/6 PASS, largest binary 766 KiB ≪ 1.5 MiB. Cross-build pipeline now verified end-to-end. |
 | 2026-06-03          | _"Split into R-1 + R-2"_ — AskUserQuestion answer to §12.4.1 atomic-split prompt. R replaced in decomposition table with TASK-007-R1 (parent Speck) + TASK-007-R2 (stealth-identity audit). Original R never had its own backlog file, so no DUPLICATE flip needed; SPLIT_INTO recorded here and in the table. |
+| 2026-06-03          | TASK-007-O AC-8 housekeeping: parent Status flipped to DONE. v0.1.0 shipped at `https://github.com/ratushnyi-labs/xdu/releases/tag/v0.1.0` (2026-06-03T14:47:47Z). See `## v0.1.0 outcome — 2026-06-03` section below for the full child-leaf roll-up. |
 
 ## Refined Description
 
@@ -242,3 +243,51 @@ harness are in scope, in which case decomposition per §12.7 follows.
 ## Speck Reference
 
 `docs/specks/SDD-TASK-007-prepare-for-publishing.md` — authored once `REFINED`.
+
+## v0.1.0 outcome — 2026-06-03
+
+**v0.1.0 shipped.** Release URL: `https://github.com/ratushnyi-labs/xdu/releases/tag/v0.1.0`.
+Published: `2026-06-03T14:47:47Z`. All 6 binary artefacts attached (3 musl
+`.tar.gz` + 2 windows-msvc `.zip` + 1 apple-darwin `.tar.gz`). Repo
+remains **PRIVATE** per standing user direction (CRR-3 Publish Log
+`post-1` + `post-1b` in `TASK-007-O-final-publish.md`).
+
+**Child-leaf roll-up (all 22 leaves DONE):**
+
+- **Wave 1 — investigation:** TASK-007-A (DONE).
+- **Wave 2 — scaffolding:** TASK-007-N1, N2, N3, N4, N5 (DONE).
+- **Wave 3 — code/UX polish:** TASK-007-B, C, D, M (DONE).
+- **Wave 4 — build pipeline:** TASK-007-N6, N8a, N8b, I, N7, N9 (DONE).
+- **Wave 5 — tests + deferred features:** TASK-007-F, G, H, J, K, L (DONE).
+- **Wave 6 — multilingual docs:** TASK-007-N10 (DONE).
+- **Wave 6.5 — audits + smoke-test:** TASK-007-P (DONE, `f5a9d78`),
+  TASK-007-Q (DONE, `8ef9fa1`), TASK-007-R1 (DONE), TASK-007-R2 (DONE).
+- **Wave 7 — publish (CRR-3 gate):** TASK-007-O (DONE).
+- **Original R:** SPLIT into R1 + R2 (no DUPLICATE flip; never had its own
+  backlog file).
+
+**Cancelled-then-retagged churn during Wave 7** (full detail in TASK-007-O
+CRR-3 Publish Log `post-1h` + `post-1i`):
+
+- First v0.1.0 tag was pinned at `f370f71`. The `release.yml` run
+  `26888633897` was user-cancelled after `x86_64-apple-darwin` queued
+  >45 min on `macos-13` (CRR-3 `post-1f` / `post-1h`).
+- Recovery path picked: patch `release.yml` to use `ubuntu-latest` +
+  `cargo-zigbuild` for `x86_64-apple-darwin` (mirroring the musl pattern),
+  then re-tag v0.1.0 to the new SHA (CRR-3 `post-1i`).
+- Patch commit `e260fe0`; tag deleted both locally and on remote; new
+  annotated v0.1.0 created at SHA `569f83f`; re-pushed; fresh workflow
+  run `26891916491` completed green at `2026-06-03T14:47:47Z`.
+
+**Out-of-scope follow-ups intentionally deferred to v0.2:**
+
+- Visibility flip PRIVATE → PUBLIC (user direction `post-1b`: keep private
+  indefinitely until user re-opens).
+- Cargo crates.io publishing (post-v0.1.0 leaf if wanted).
+- Package-manager submissions (Homebrew / scoop / nix).
+- Announcement / external messaging (separate CRR-3 leaf).
+- macOS / BSD trash mode (TASK-007-J shipped Linux + Windows only).
+- The 2 informational `cargo-audit` warnings (RUSTSEC-2024-0436 paste
+  unmaintained + RUSTSEC-2026-0002 lru unsound) — both transitive via
+  ratatui; remediation tracked in
+  `docs/audits/dependency-audit-2026-06-03.md`.

@@ -118,3 +118,6 @@ with an interactive terminal UI.
 - Zero `unsafe` outside the documented Win32 / libc FFI blocks in
   `src/disk_space.rs` and `src/lock_detect.rs`; each block carries a
   `// SAFETY:` comment per ADR §7.
+
+[Unreleased]: https://github.com/ratushnyi-labs/xdu/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/ratushnyi-labs/xdu/releases/tag/v0.1.0
