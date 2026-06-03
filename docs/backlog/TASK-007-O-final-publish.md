@@ -97,6 +97,7 @@ advisory-approval surfacing — both supervisor-inline work.
 | Time (UTC) | Role | Purpose | Status | Notes |
 |------------|------|---------|--------|-------|
 | 2026-06-03 | BA   | Refine + author Speck | SUCCESS | wrote `docs/specks/SDD-TASK-007-O-final-publish.md` (101 lines, 8 ACs, 6 SEC ACs); Status left IN PROGRESS per §12.4.1 — O completes only when the actual publish lands |
+| 2026-06-03 | DEV  | Pre-publish verification gate (Step 1 of Speck) | SUCCESS | 4/4 gates green inside Docker (fmt clean, clippy `-D warnings` clean, `cargo test --all --locked` 106/106, `cargo audit` exit 0 with the 2 known informational warnings RUSTSEC-2024-0436 + RUSTSEC-2026-0002 unchanged from P); transcript at `docs/audits/pre-publish-verification-2026-06-03.md`; READY-FOR-USER-APPROVAL for Step 2 |
 
 ## Compliance Notes — §9.5
 
