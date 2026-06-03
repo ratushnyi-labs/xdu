@@ -42,9 +42,13 @@ jobs:
             os: ubuntu-latest
             cross: zig
             ext: ""
+          # x86_64-apple-darwin: cross-compiled from ubuntu-latest via zigbuild
+          # rather than native macos-13 (Intel runner capacity is heavily
+          # constrained as part of GitHub's Intel-runner retirement; see
+          # TASK-007-O post-1h note).
           - target: x86_64-apple-darwin
-            os: macos-13
-            cross: none
+            os: ubuntu-latest
+            cross: zig
             ext: ""
           - target: aarch64-apple-darwin
             os: macos-14
