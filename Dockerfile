@@ -36,6 +36,11 @@ RUN rustup target add \
 # heavier cross-tools layer.
 RUN cargo install --locked cargo-llvm-cov
 
+# cargo-audit for advisory scanning per lawbook §7 + org pattern (TASK-007-A
+# finding line 226). Pinned indirectly via `--locked`, mirroring the
+# cargo-llvm-cov pattern above.
+RUN cargo install --locked cargo-audit
+
 WORKDIR /src
 
 # =============================================================================
