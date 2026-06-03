@@ -88,11 +88,20 @@ RUN cargo install --locked cargo-xwin \
 # Populate the MSVC SDK cache via xwin splat. --accept-license records
 # acceptance of Microsoft's EULA (see header comment for URL). Both arches
 # are splatted in a single invocation; the layer caches the ~1-2 GiB payload.
+#
+# xwin 0.9.0 moved --arch from the `splat` subcommand to a global option
+# (placed BEFORE the subcommand) and accepts a comma-separated list rather
+# than repeated flags. Verified via `xwin --help` / `xwin splat --help` in
+# a throwaway `rust:1.95-bookworm` container (xwin v0.9.0 installed via
+# `cargo install --locked xwin`); the global `--arch <ARCH>` option lists
+# `[possible values: x86, x86_64, aarch, aarch64]`. See BUG-005.
 ENV XWIN_CACHE_DIR=/xwin
-RUN xwin --accept-license splat \
-        --output /xwin \
-        --arch x86_64 \
-        --arch aarch64
+RUN xwin --accept-license \
+        --arch x86_64,aarch64 \
+        --timeout 300s \
+        --http-retry 3 \
+        splat \
+        --output /xwin
 
 # =============================================================================
 # Stage: build — compile real source for ${TARGET}.
