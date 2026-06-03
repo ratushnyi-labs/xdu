@@ -134,6 +134,8 @@ the human-attacker substitution.
 | 2026-05-21          | Wave 5 complete: all 6 leaves DONE. 97 unit + 6 integration + 3 snapshot = 106 tests pass. Apple-darwin / windows-msvc cross-build verification still deferred to TASK-007-O. |
 | 2026-06-03          | _"what else should we do before publishing the app?"_ — supervisor audit of the pre-publish gap list before scheduling waves 6 + 7. |
 | 2026-06-03          | _"go"_ — drain remaining backlog per §1.2.12. New leaves added: P (audit + llvm-cov baseline), Q (cross-build smoke-test), R (parent Speck + stealth-identity audit). Switching from inline execution to supervisor-subagent model (§1.2 + §1.2.13) for all remaining leaves. Stop directive: AT_BACKLOG_DRAIN; CRR-3 halt scheduled at O (push to public remote). |
+| 2026-06-03          | P DONE (`f5a9d78`) — clean cargo-audit (2 informational warnings flagged for O gate), coverage baseline 74.06% (no fail-under gate added). Q DONE (`8ef9fa1`) — smoke-test caught BUG-005 (xwin 0.9.0 CLI break). BUG-005 DONE (`66ea297`) — 6/6 PASS, largest binary 766 KiB ≪ 1.5 MiB. Cross-build pipeline now verified end-to-end. |
+| 2026-06-03          | _"Split into R-1 + R-2"_ — AskUserQuestion answer to §12.4.1 atomic-split prompt. R replaced in decomposition table with TASK-007-R1 (parent Speck) + TASK-007-R2 (stealth-identity audit). Original R never had its own backlog file, so no DUPLICATE flip needed; SPLIT_INTO recorded here and in the table. |
 
 ## Refined Description
 
@@ -193,7 +195,9 @@ reflect dependencies surfaced during TASK-007-A investigation.
 | TASK-007-N10  | Multilingual user manuals (en/ua/es/fr/it/pt, machine-translated) | DOC     | ABOVE_EASY  | N5                |
 | TASK-007-P    | cargo-audit install + clean pass; cargo-llvm-cov baseline run    | INFRA    | EASY        | G                 |
 | TASK-007-Q    | Local 6-target cross-build smoke-test (before CI sees the matrix) | INFRA   | EASY        | N6, N8a, N8b, I   |
-| TASK-007-R    | Parent SDD-TASK-007 Speck + docs/audits/stealth-identity record  | DOC      | EASY        | N5                |
+| ~~TASK-007-R~~| ~~Parent SDD-TASK-007 Speck + docs/audits/stealth-identity record~~ — **SPLIT** per §12.4.1 (user confirmed 2026-06-03) into R1 + R2 | — | — | —              |
+| TASK-007-R1   | Author parent SDD-TASK-007 Speck (cross-cutting ACs over the 17 child Specks) | DOC | EASY | N5            |
+| TASK-007-R2   | docs/audits/stealth-identity-2026-06-03.md — §5.4 sweep record   | DOC      | EASY        | N5                |
 | TASK-007-O    | Final pre-publish gate + `git tag v0.1.0` + GH release (CRR-3)   | INFRA    | EASY        | all above         |
 
 Execution waves:
