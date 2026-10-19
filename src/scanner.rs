@@ -391,6 +391,24 @@ fn dev_of(_meta: &Metadata) -> u64 {
     0
 }
 
+/// macOS `SF_DATALESS`: the file's contents live in the cloud, not on disk.
+const SF_DATALESS: u32 = 0x4000_0000;
+
+fn flags_dataless(flags: u32) -> bool {
+    flags & SF_DATALESS != 0
+}
+
+#[cfg(target_os = "macos")]
+fn is_dataless(meta: &Metadata) -> bool {
+    use std::os::macos::fs::MetadataExt;
+    flags_dataless(meta.st_flags())
+}
+
+#[cfg(all(unix, not(target_os = "macos")))]
+fn is_dataless(_meta: &Metadata) -> bool {
+    false
+}
+
 #[cfg(unix)]
 fn compute_sizes(
     meta: &Metadata,
@@ -404,6 +422,11 @@ fn compute_sizes(
         return (0, 0);
     }
     use std::os::unix::fs::MetadataExt;
+    // Online-only placeholders (Dropbox / iCloud / OneDrive File Provider
+    // files) report their full logical length but occupy nothing locally.
+    if is_dataless(meta) {
+        return (0, 0);
+    }
     let size = meta.len();
     let alloc = meta.blocks().saturating_mul(512);
     if matches!(kind, NodeKind::File) && meta.nlink() > 1 {
@@ -555,6 +578,13 @@ mod tests {
     }
 
     #[cfg(unix)]
+    #[test]
+    fn dataless_flag_detection() {
+        assert!(flags_dataless(0x4000_0020), "Dropbox placeholder flags");
+        assert!(!flags_dataless(0x0000_0020), "compressed only");
+        assert!(!flags_dataless(0));
+    }
+
     #[test]
     fn permission_denied_subdir_is_recorded_not_fatal() {
         use std::os::unix::fs::PermissionsExt;

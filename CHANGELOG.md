@@ -17,6 +17,9 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- macOS: online-only (dataless) files from Dropbox, iCloud Drive, OneDrive and other
+  File Provider services no longer count their logical size as used space.
+
 ## [0.1.0] - 2026-06-03
 
 Initial release. Single static binary per platform, read-only disk-usage explorer
