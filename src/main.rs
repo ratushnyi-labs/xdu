@@ -38,6 +38,7 @@ fn main() {
     };
     let opts = ScanOpts {
         cross_fs: args.cross_fs,
+        threads: args.threads,
         ..ScanOpts::default()
     };
     let handle = match scan_async(path.clone(), opts.clone()) {
@@ -61,6 +62,7 @@ fn main() {
 struct Args {
     path: Option<PathBuf>,
     cross_fs: bool,
+    threads: usize,
     si: bool,
     trash: bool,
     show_help: bool,
@@ -70,15 +72,23 @@ struct Args {
 fn parse_args<I: IntoIterator<Item = String>>(it: I) -> Result<Args, String> {
     let mut path: Option<PathBuf> = None;
     let mut cross_fs = false;
+    let mut threads = 0_usize;
     let mut si = false;
     let mut trash = false;
     let mut show_help = false;
     let mut show_version = false;
-    for arg in it {
+    let mut it = it.into_iter();
+    while let Some(arg) = it.next() {
         match arg.as_str() {
             "-h" | "--help" => show_help = true,
             "-V" | "--version" => show_version = true,
             "--cross-fs" => cross_fs = true,
+            "-j" | "--threads" => {
+                threads = it
+                    .next()
+                    .and_then(|v| v.parse().ok())
+                    .ok_or_else(|| format!("{arg} needs a number (0 = auto)"))?;
+            }
             "--si" => si = true,
             "--trash" => trash = true,
             s if s.starts_with('-') => return Err(format!("unknown flag: {s}")),
@@ -93,6 +103,7 @@ fn parse_args<I: IntoIterator<Item = String>>(it: I) -> Result<Args, String> {
     Ok(Args {
         path,
         cross_fs,
+        threads,
         si,
         trash,
         show_help,
@@ -168,6 +179,7 @@ fn print_help() {
     println!();
     println!("flags:");
     println!("  --cross-fs    scan across filesystem boundaries (Unix)");
+    println!("  -j, --threads N  scanner threads (default: auto; 1 = sequential)");
     println!("  --si          use 1000-based units (KB, MB, ...)");
     println!("  --trash       send deleted items to the OS trash (Linux + Windows)");
     println!("  -V, --version print version and exit");

@@ -43,6 +43,7 @@ xdu /                # scan the filesystem root (Unix)
 xdu C:\              # scan a drive root (Windows)
 xdu --si             # use SI units (KB, MB, ...) instead of IEC (KiB, MiB, ...)
 xdu --cross-fs       # follow mount points (Unix; v0.2 on Windows)
+xdu -j 8             # use 8 scanner threads (default: auto; 1 = sequential)
 ```
 
 Inside the TUI:

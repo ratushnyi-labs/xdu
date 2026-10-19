@@ -1,6 +1,8 @@
 //! Filesystem scanner.
 //!
-//! Iterative DFS over a directory subtree, populating a [`Tree`]. Honors the
+//! Parallel walk over a directory subtree, populating a [`Tree`]: a pool of
+//! threads pulls directories from a shared work stack, runs the syscalls
+//! outside the tree lock and applies results in per-directory batches. Honors the
 //! v0.1.0 BR set: BR-002 hardlink dedup (Unix), BR-003 mount boundary (Unix),
 //! BR-004 no symlink follow, BR-005 errors don't abort, BR-006 size mode is
 //! a display concern (handled by [`crate::format`]).
@@ -16,7 +18,8 @@ use std::collections::HashSet;
 use std::fs::Metadata;
 use std::io;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Condvar, Mutex};
 use std::thread::JoinHandle;
 use std::time::UNIX_EPOCH;
 
@@ -24,6 +27,8 @@ use std::time::UNIX_EPOCH;
 pub struct ScanOpts {
     pub cross_fs: bool,
     pub max_errors: usize,
+    /// Walker threads; `0` picks a count from the available cores.
+    pub threads: usize,
 }
 
 impl Default for ScanOpts {
@@ -31,6 +36,7 @@ impl Default for ScanOpts {
         Self {
             cross_fs: false,
             max_errors: 10_000,
+            threads: 0,
         }
     }
 }
@@ -125,9 +131,56 @@ fn init_state(root: &Path) -> Result<Arc<Mutex<ScanResult>>, ScanError> {
     })))
 }
 
-enum Frame {
-    Pre(NodeId, PathBuf),
-    Post(NodeId),
+/// One directory awaiting (or undergoing) a read.
+///
+/// `pending` counts unfinished work at and below this directory: 1 for its own
+/// read plus 1 per child directory that is not finalized yet. Whichever thread
+/// drops it to zero marks the directory finalized and then releases the
+/// parent's count in turn.
+struct DirJob {
+    id: NodeId,
+    path: PathBuf,
+    parent: Option<Arc<DirJob>>,
+    pending: AtomicUsize,
+}
+
+struct Queue {
+    jobs: Vec<Arc<DirJob>>,
+    /// Jobs queued or currently running. Zero means the walk is complete.
+    outstanding: usize,
+    abort: bool,
+}
+
+/// State shared by all walker threads of one scan.
+struct Shared<'a> {
+    state: &'a Mutex<ScanResult>,
+    opts: &'a ScanOpts,
+    root_dev: u64,
+    hardlinks: Mutex<HashSet<(u64, u64)>>,
+    queue: Mutex<Queue>,
+    wake: Condvar,
+}
+
+/// Stops the other walkers if this one panics, so the scan cannot hang
+/// waiting for a job that will never finish.
+struct AbortOnPanic<'a, 'b>(&'a Shared<'b>);
+
+impl Drop for AbortOnPanic<'_, '_> {
+    fn drop(&mut self) {
+        if std::thread::panicking() {
+            self.0.abort();
+        }
+    }
+}
+
+/// Number of walker threads: `requested` when non-zero, otherwise twice the
+/// core count (directory walking is syscall/IO bound), clamped to 4..=32.
+fn worker_count(requested: usize) -> usize {
+    if requested > 0 {
+        return requested;
+    }
+    let cores = std::thread::available_parallelism().map_or(4, |n| n.get());
+    (cores * 2).clamp(4, 32)
 }
 
 fn scan_into(state: &Mutex<ScanResult>, root: PathBuf, opts: ScanOpts) {
@@ -146,32 +199,110 @@ fn scan_into(state: &Mutex<ScanResult>, root: PathBuf, opts: ScanOpts) {
         id
     };
 
-    let mut hardlinks: HashSet<(u64, u64)> = HashSet::new();
-    let mut stack: Vec<Frame> = vec![Frame::Pre(root_id, root)];
+    let root_job = Arc::new(DirJob {
+        id: root_id,
+        path: root,
+        parent: None,
+        pending: AtomicUsize::new(1),
+    });
+    let shared = Shared {
+        state,
+        opts: &opts,
+        root_dev,
+        hardlinks: Mutex::new(HashSet::new()),
+        queue: Mutex::new(Queue {
+            jobs: vec![root_job],
+            outstanding: 1,
+            abort: false,
+        }),
+        wake: Condvar::new(),
+    };
 
-    while let Some(frame) = stack.pop() {
-        match frame {
-            Frame::Post(id) => {
-                state.lock().unwrap().tree.set_finalized(id, true);
+    std::thread::scope(|scope| {
+        for i in 1..worker_count(opts.threads) {
+            // A failed spawn only means fewer walkers; the calling thread
+            // always walks too.
+            let _ = std::thread::Builder::new()
+                .name(format!("xdu-walk-{i}"))
+                .spawn_scoped(scope, || shared.run_worker());
+        }
+        shared.run_worker();
+    });
+
+    state.lock().unwrap().running = false;
+}
+
+impl Shared<'_> {
+    fn run_worker(&self) {
+        let _guard = AbortOnPanic(self);
+        while let Some(job) = self.next_job() {
+            if self.process_dir(&job) {
+                self.release(job);
+            } else {
+                self.abort();
             }
-            Frame::Pre(parent_id, parent_path) => {
-                stack.push(Frame::Post(parent_id));
-                if !walk_one(
-                    state,
-                    &mut hardlinks,
-                    &mut stack,
-                    parent_id,
-                    &parent_path,
-                    root_dev,
-                    &opts,
-                ) {
-                    break;
-                }
-            }
+            self.finish_job();
         }
     }
 
-    state.lock().unwrap().running = false;
+    /// Block until a directory is available; `None` once the walk is complete
+    /// or aborted.
+    fn next_job(&self) -> Option<Arc<DirJob>> {
+        let mut q = self.queue.lock().unwrap();
+        loop {
+            if q.abort {
+                return None;
+            }
+            if let Some(job) = q.jobs.pop() {
+                return Some(job);
+            }
+            if q.outstanding == 0 {
+                return None;
+            }
+            q = self.wake.wait(q).unwrap();
+        }
+    }
+
+    fn push_jobs(&self, jobs: Vec<Arc<DirJob>>) {
+        if jobs.is_empty() {
+            return;
+        }
+        let mut q = self.queue.lock().unwrap();
+        q.outstanding += jobs.len();
+        q.jobs.extend(jobs);
+        drop(q);
+        self.wake.notify_all();
+    }
+
+    fn finish_job(&self) {
+        let mut q = self.queue.lock().unwrap();
+        q.outstanding -= 1;
+        let done = q.outstanding == 0;
+        drop(q);
+        if done {
+            self.wake.notify_all();
+        }
+    }
+
+    fn abort(&self) {
+        self.queue.lock().unwrap().abort = true;
+        self.wake.notify_all();
+    }
+
+    /// Give back one unit of `node`'s pending count. A directory whose count
+    /// reaches zero is finalized and releases its parent in turn.
+    fn release(&self, mut node: Arc<DirJob>) {
+        loop {
+            if node.pending.fetch_sub(1, Ordering::AcqRel) != 1 {
+                return;
+            }
+            self.state.lock().unwrap().tree.set_finalized(node.id, true);
+            match node.parent.clone() {
+                Some(parent) => node = parent,
+                None => return,
+            }
+        }
+    }
 }
 
 /// Soft cap on batched inserts per lock acquisition. Keeps the lock duration
@@ -188,150 +319,144 @@ struct StagedEntry {
     entry_path: PathBuf,
 }
 
-#[allow(clippy::too_many_arguments)]
-fn walk_one(
-    state: &Mutex<ScanResult>,
-    hardlinks: &mut HashSet<(u64, u64)>,
-    stack: &mut Vec<Frame>,
-    parent_id: NodeId,
-    parent_path: &Path,
-    root_dev: u64,
-    opts: &ScanOpts,
-) -> bool {
-    let entries = match std::fs::read_dir(parent_path) {
-        Ok(e) => e,
-        Err(e) => {
-            let mut guard = state.lock().unwrap();
-            let s: &mut ScanResult = &mut guard;
-            push_err(
-                &mut s.errors,
-                &mut s.overflow_errors,
-                opts.max_errors,
-                parent_path,
-                &e,
-            );
-            s.tree.mark_error(parent_id);
-            return true;
-        }
-    };
-
-    // Stage all entries' inserts + deferred errors locally; apply under a single
-    // lock acquisition per batch (TASK-007-D). The previous design took the lock
-    // once per entry — N acquisitions for N entries. This brings it to ~1.
-    let mut batch: Vec<StagedEntry> = Vec::with_capacity(64);
-    let mut deferred_errors: Vec<(PathBuf, io::Error)> = Vec::new();
-
-    for entry in entries {
-        let entry = match entry {
+impl Shared<'_> {
+    /// Read one directory: syscalls (`read_dir`, `lstat`) run outside the tree
+    /// lock; inserts are applied in batches. Returns `false` when the tree is
+    /// out of capacity and the whole scan must stop.
+    fn process_dir(&self, job: &Arc<DirJob>) -> bool {
+        let entries = match std::fs::read_dir(&job.path) {
             Ok(e) => e,
             Err(e) => {
-                deferred_errors.push((parent_path.to_path_buf(), e));
-                continue;
+                let mut guard = self.state.lock().unwrap();
+                let s: &mut ScanResult = &mut guard;
+                push_err(
+                    &mut s.errors,
+                    &mut s.overflow_errors,
+                    self.opts.max_errors,
+                    &job.path,
+                    &e,
+                );
+                s.tree.mark_error(job.id);
+                return true;
             }
         };
-        let entry_path = entry.path();
-        let meta = match entry.metadata() {
-            Ok(m) => m,
-            Err(e) => {
-                deferred_errors.push((entry_path, e));
+
+        // Stage all entries' inserts + deferred errors locally; apply under a
+        // single lock acquisition per batch (TASK-007-D).
+        let mut batch: Vec<StagedEntry> = Vec::with_capacity(64);
+        let mut deferred_errors: Vec<(PathBuf, io::Error)> = Vec::new();
+
+        for entry in entries {
+            let entry = match entry {
+                Ok(e) => e,
+                Err(e) => {
+                    deferred_errors.push((job.path.clone(), e));
+                    continue;
+                }
+            };
+            let entry_path = entry.path();
+            let meta = match entry.metadata() {
+                Ok(m) => m,
+                Err(e) => {
+                    deferred_errors.push((entry_path, e));
+                    continue;
+                }
+            };
+            if !self.opts.cross_fs && dev_of(&meta) != self.root_dev {
                 continue;
             }
-        };
-        if !opts.cross_fs && dev_of(&meta) != root_dev {
-            continue;
-        }
-        let kind = classify(&meta);
-        let name = entry.file_name().to_string_lossy().into_owned();
-        let (size, alloc) = compute_sizes(&meta, kind, hardlinks);
-        let accessed_secs = accessed_unix_secs(&meta);
-        batch.push(StagedEntry {
-            kind,
-            name,
-            size,
-            alloc,
-            accessed_secs,
-            entry_path,
-        });
-        if batch.len() >= WALK_BATCH_CAP
-            && !apply_batch(
-                state,
-                stack,
-                parent_id,
-                &mut batch,
-                &mut deferred_errors,
-                opts,
-            )
-        {
-            return false;
-        }
-    }
-
-    apply_batch(
-        state,
-        stack,
-        parent_id,
-        &mut batch,
-        &mut deferred_errors,
-        opts,
-    )
-}
-
-/// Apply one batch of staged inserts + deferred errors under a single lock.
-/// Returns `false` if the tree's arena hit `OutOfCapacity` mid-batch (signals
-/// the caller to stop). Deferred stack pushes are drained AFTER the lock is
-/// released to keep the critical section short.
-fn apply_batch(
-    state: &Mutex<ScanResult>,
-    stack: &mut Vec<Frame>,
-    parent_id: NodeId,
-    batch: &mut Vec<StagedEntry>,
-    deferred_errors: &mut Vec<(PathBuf, io::Error)>,
-    opts: &ScanOpts,
-) -> bool {
-    if batch.is_empty() && deferred_errors.is_empty() {
-        return true;
-    }
-    let mut stack_pushes: Vec<(NodeId, PathBuf)> = Vec::with_capacity(batch.len() / 4);
-    let mut overflowed = false;
-    {
-        let mut guard = state.lock().unwrap();
-        let s: &mut ScanResult = &mut guard;
-        for (path, e) in deferred_errors.drain(..) {
-            push_err(
-                &mut s.errors,
-                &mut s.overflow_errors,
-                opts.max_errors,
-                &path,
-                &e,
-            );
-            s.tree.mark_error(parent_id);
-        }
-        for entry in batch.drain(..) {
-            match s
-                .tree
-                .add_child(parent_id, entry.kind, entry.name, entry.size, entry.alloc)
+            let kind = classify(&meta);
+            let name = entry.file_name().to_string_lossy().into_owned();
+            let (size, alloc) = compute_sizes(&meta, kind, &self.hardlinks);
+            let accessed_secs = accessed_unix_secs(&meta);
+            batch.push(StagedEntry {
+                kind,
+                name,
+                size,
+                alloc,
+                accessed_secs,
+                entry_path,
+            });
+            if batch.len() >= WALK_BATCH_CAP
+                && !self.apply_batch(job, &mut batch, &mut deferred_errors)
             {
-                Ok(id) => {
-                    s.tree.set_accessed(id, entry.accessed_secs);
-                    s.tree.bubble_up_add(id, entry.size, entry.alloc, 1);
-                    if matches!(entry.kind, NodeKind::Dir) {
-                        stack_pushes.push((id, entry.entry_path));
+                return false;
+            }
+        }
+
+        self.apply_batch(job, &mut batch, &mut deferred_errors)
+    }
+
+    /// Apply one batch of staged inserts + deferred errors under a single
+    /// lock, bubbling the batch total up the ancestor chain once. Child
+    /// directories become new jobs, queued after the lock is released.
+    /// Returns `false` if the tree's arena hit `OutOfCapacity` mid-batch.
+    fn apply_batch(
+        &self,
+        job: &Arc<DirJob>,
+        batch: &mut Vec<StagedEntry>,
+        deferred_errors: &mut Vec<(PathBuf, io::Error)>,
+    ) -> bool {
+        if batch.is_empty() && deferred_errors.is_empty() {
+            return true;
+        }
+        let mut new_jobs: Vec<Arc<DirJob>> = Vec::with_capacity(batch.len() / 4);
+        let mut overflowed = false;
+        {
+            let mut guard = self.state.lock().unwrap();
+            let s: &mut ScanResult = &mut guard;
+            for (path, e) in deferred_errors.drain(..) {
+                push_err(
+                    &mut s.errors,
+                    &mut s.overflow_errors,
+                    self.opts.max_errors,
+                    &path,
+                    &e,
+                );
+                s.tree.mark_error(job.id);
+            }
+            let mut first_added: Option<NodeId> = None;
+            let (mut sum_size, mut sum_alloc, mut added) = (0_u64, 0_u64, 0_u64);
+            for entry in batch.drain(..) {
+                match s
+                    .tree
+                    .add_child(job.id, entry.kind, entry.name, entry.size, entry.alloc)
+                {
+                    Ok(id) => {
+                        s.tree.set_accessed(id, entry.accessed_secs);
+                        first_added.get_or_insert(id);
+                        sum_size = sum_size.saturating_add(entry.size);
+                        sum_alloc = sum_alloc.saturating_add(entry.alloc);
+                        added += 1;
+                        if matches!(entry.kind, NodeKind::Dir) {
+                            job.pending.fetch_add(1, Ordering::AcqRel);
+                            new_jobs.push(Arc::new(DirJob {
+                                id,
+                                path: entry.entry_path,
+                                parent: Some(job.clone()),
+                                pending: AtomicUsize::new(1),
+                            }));
+                        }
+                    }
+                    Err(TreeError::OutOfCapacity) => {
+                        overflowed = true;
+                        break;
+                    }
+                    Err(TreeError::InvalidParent) => {
+                        s.tree.mark_error(job.id);
                     }
                 }
-                Err(TreeError::OutOfCapacity) => {
-                    overflowed = true;
-                    break;
-                }
-                Err(TreeError::InvalidParent) => {
-                    s.tree.mark_error(parent_id);
-                }
+            }
+            if let Some(id) = first_added {
+                s.tree.bubble_up_add(id, sum_size, sum_alloc, added);
             }
         }
+        if overflowed {
+            return false;
+        }
+        self.push_jobs(new_jobs);
+        true
     }
-    for (id, path) in stack_pushes {
-        stack.push(Frame::Pre(id, path));
-    }
-    !overflowed
 }
 
 struct Scan;
@@ -413,7 +538,7 @@ fn is_dataless(_meta: &Metadata) -> bool {
 fn compute_sizes(
     meta: &Metadata,
     kind: NodeKind,
-    hardlinks: &mut HashSet<(u64, u64)>,
+    hardlinks: &Mutex<HashSet<(u64, u64)>>,
 ) -> (u64, u64) {
     // Directory entries carry their own listing size (typically one block on
     // ext-family filesystems). Per ncdu convention we count only the sum of
@@ -431,7 +556,7 @@ fn compute_sizes(
     let alloc = meta.blocks().saturating_mul(512);
     if matches!(kind, NodeKind::File) && meta.nlink() > 1 {
         let key = (meta.dev(), meta.ino());
-        if !hardlinks.insert(key) {
+        if !hardlinks.lock().unwrap().insert(key) {
             return (size, 0);
         }
     }
@@ -442,7 +567,7 @@ fn compute_sizes(
 fn compute_sizes(
     meta: &Metadata,
     kind: NodeKind,
-    _hardlinks: &mut HashSet<(u64, u64)>,
+    _hardlinks: &Mutex<HashSet<(u64, u64)>>,
 ) -> (u64, u64) {
     if matches!(kind, NodeKind::Dir) {
         return (0, 0);
@@ -654,6 +779,49 @@ mod tests {
         assert_eq!(allocs.len(), 2);
         assert_eq!(allocs[0], 0);
         assert!(allocs[1] > 0);
+    }
+
+    /// Build a wide + deep tree and require that every thread count yields
+    /// identical totals, every directory finalized, and no lost entries.
+    #[test]
+    fn parallel_scan_matches_sequential_and_finalizes_everything() {
+        let td = TempDir::new();
+        let mut expected_size = 0_u64;
+        let mut expected_entries = 1_u64; // root
+        for a in 0..8 {
+            for b in 0..8 {
+                let dir = td.path.join(format!("a{a}")).join(format!("b{b}"));
+                std::fs::create_dir_all(&dir).unwrap();
+                for f in 0..20 {
+                    let body = vec![b'x'; 10 + f];
+                    write_file(&dir.join(format!("f{f}")), &body);
+                    expected_size += body.len() as u64;
+                }
+            }
+        }
+        // 8 a-dirs + 64 b-dirs + 64*20 files
+        expected_entries += 8 + 64 + 64 * 20;
+        let empty = td.path.join("empty");
+        std::fs::create_dir(&empty).unwrap();
+        expected_entries += 1;
+
+        for threads in [1, 2, 8, 0] {
+            let opts = ScanOpts {
+                threads,
+                ..ScanOpts::default()
+            };
+            let r = scan(&td.path, &opts).unwrap();
+            let root = r.tree.get(r.tree.root()).unwrap();
+            assert_eq!(root.size, expected_size, "threads={threads}");
+            assert_eq!(root.entries, expected_entries, "threads={threads}");
+            assert!(!r.running);
+            let mut stack = vec![r.tree.root()];
+            while let Some(id) = stack.pop() {
+                let n = r.tree.get(id).unwrap();
+                assert!(n.finalized, "{} not finalized (threads={threads})", n.name);
+                stack.extend(r.tree.children(id));
+            }
+        }
     }
 
     #[test]

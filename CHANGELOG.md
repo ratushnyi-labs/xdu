@@ -15,6 +15,10 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- Scanner is now multi-threaded on every platform (thread pool over a shared
+  directory queue; syscalls run outside the tree lock, batch totals bubble up
+  once). `-j/--threads N` overrides the automatic count; `-j 1` is sequential.
+
 ### Fixed
 
 - macOS: online-only (dataless) files from Dropbox, iCloud Drive, OneDrive and other
