@@ -1,7 +1,4 @@
-//! Terminal UI: runtime, tree-view wid    let (title, step) = job
-        .lock()
-        .map(|g| (g.title.clone(), g.step.clone()))
-        .unwrap_or_default();et, header / footer / help / errors
+//! Terminal UI: runtime, tree-view widget, header / footer / help / errors
 //! overlays, and rescan flow. Combines TASK-001-H/I/J/K leaves into one
 //! module to keep cross-references compact.
 //!
@@ -1084,7 +1081,10 @@ fn render(f: &mut Frame, app: &App) {
 }
 
 fn render_shrink_busy(f: &mut Frame, area: Rect, job: &SharedProgress) {
-    let step = job.lock().map(|g| g.step.clone()).unwrap_or_default();
+    let (title, step) = job
+        .lock()
+        .map(|g| (g.title.clone(), g.step.clone()))
+        .unwrap_or_default();
     let lines = vec![
         Line::from(format!("{} {step}…", spinner_char())),
         Line::from(""),
