@@ -13,6 +13,7 @@ use crate::export;
 use crate::format::{bar, format_size, format_ymd, SizeMode};
 use crate::lock_detect::{self, LockHolder};
 use crate::scanner::{scan_async, ScanError, ScanHandle, ScanOpts, ScanResult};
+use crate::time_machine;
 use crate::trash;
 use crate::tree::{Node, NodeId, NodeKind, SortKey};
 use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
@@ -78,6 +79,7 @@ enum ConfirmAction {
     DeleteMarked,
     Shrink,
     Prune,
+    TimeMachine,
 }
 
 #[derive(Debug, Clone)]
@@ -437,6 +439,45 @@ impl App {
         });
     }
 
+    fn start_time_machine_prompt(&mut self) {
+        if !time_machine::is_supported() {
+            self.status = Some("Time Machine snapshots are only available on macOS".into());
+            return;
+        }
+        let snapshots = match time_machine::list_snapshots(&mut docker_shrink::SystemRunner) {
+            Ok(s) => s,
+            Err(e) => {
+                self.status = Some(format!("tmutil listlocalsnapshots failed: {e}"));
+                return;
+            }
+        };
+        if snapshots.is_empty() {
+            self.status = Some("No Time Machine local snapshots to delete".into());
+            return;
+        }
+        let mut lines = vec![
+            format!("Delete Time Machine local snapshots ({})", snapshots.len()),
+            String::new(),
+        ];
+        lines.extend(snapshots.iter().take(6).map(|d| format!("  {d}")));
+        if snapshots.len() > 6 {
+            lines.push(format!("  … and {} more", snapshots.len() - 6));
+        }
+        lines.extend([
+            String::new(),
+            "Runs: tmutil deletelocalsnapshots <date> for each one.".into(),
+            "These are the on-disk APFS snapshots of this Mac; they cannot be".into(),
+            "restored afterwards. Backups on the Time Machine disk are untouched.".into(),
+            "macOS may ask for your administrator password.".into(),
+        ]);
+        self.confirm_prompt = Some(ConfirmPrompt {
+            target: self.current,
+            message: lines.join("\n"),
+            yes_focused: false,
+            action: ConfirmAction::TimeMachine,
+        });
+    }
+
     fn start_shrink(&mut self, target: NodeId) {
         let Some(path) = self.absolute_path_for(target) else {
             self.status = Some("shrink: cannot resolve path".into());
@@ -475,6 +516,7 @@ impl App {
             ConfirmAction::DeleteMarked => self.perform_delete_marked(),
             ConfirmAction::Shrink => self.start_shrink(target),
             ConfirmAction::Prune => self.shrink_job = Some(docker_shrink::spawn_prune()),
+            ConfirmAction::TimeMachine => self.shrink_job = Some(time_machine::spawn_delete()),
         }
     }
 
@@ -787,6 +829,7 @@ impl App {
             KeyCode::Esc => self.marks.clear(),
             KeyCode::Char('z') => self.start_shrink_prompt(),
             KeyCode::Char('P') => self.start_prune_prompt(),
+            KeyCode::Char('T') => self.start_time_machine_prompt(),
             _ => {}
         }
     }
@@ -1222,6 +1265,7 @@ fn render_confirm(f: &mut Frame, area: Rect, prompt: &ConfirmPrompt) {
     let title = match prompt.action {
         ConfirmAction::Shrink => " Confirm Docker prune + shrink ",
         ConfirmAction::Prune => " Confirm Docker prune ",
+        ConfirmAction::TimeMachine => " Confirm delete Time Machine snapshots ",
         ConfirmAction::Delete | ConfirmAction::DeleteMarked => " Confirm delete ",
     };
     let block = Block::default().borders(Borders::ALL).title(title);
@@ -1503,6 +1547,7 @@ fn render_help(f: &mut Frame, area: Rect) {
         Line::from("  Space / a / Esc mark entry / mark all / clear; d deletes marked"),
         Line::from("  z               shrink the selected .vhdx (+ Docker prune)"),
         Line::from("  P               Docker prune only (no stop, no compact)"),
+        Line::from("  T               delete Time Machine local snapshots (macOS)"),
         Line::from("  !               show errors"),
         Line::from("  ? / F1          this help"),
         Line::from("  q / Ctrl-C      quit"),
@@ -2013,6 +2058,20 @@ mod tests {
         } else {
             assert!(app.confirm_prompt.is_none());
             assert!(app.status.as_deref().unwrap_or("").contains("Windows"));
+        }
+        assert!(app.shrink_job.is_none(), "nothing runs before confirmation");
+        let _ = std::fs::remove_dir_all(&td);
+    }
+
+    #[test]
+    fn shift_t_never_runs_anything_before_confirmation() {
+        let (mut app, td) = app_with_files("tm-key", &["a.txt"]);
+        app.handle_key(KeyCode::Char('T'), KeyModifiers::NONE);
+        if let Some(p) = app.confirm_prompt.as_ref() {
+            assert_eq!(p.action, ConfirmAction::TimeMachine);
+            assert!(!p.yes_focused, "default focus must be No");
+        } else {
+            assert!(app.status.is_some(), "explains why no prompt opened");
         }
         assert!(app.shrink_job.is_none(), "nothing runs before confirmation");
         let _ = std::fs::remove_dir_all(&td);

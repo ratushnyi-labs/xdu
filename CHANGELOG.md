@@ -9,6 +9,10 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- macOS: `T` deletes Time Machine local snapshots (`tmutil deletelocalsnapshots`)
+  behind a confirmation prompt, falling back to the administrator-password
+  dialog when macOS requires root. Backups on the Time Machine disk are untouched.
+
 ### Changed
 
 ### Fixed

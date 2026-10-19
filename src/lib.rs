@@ -10,6 +10,7 @@ pub mod export;
 pub mod format;
 pub mod lock_detect;
 pub mod scanner;
+pub mod time_machine;
 pub mod trash;
 pub mod tree;
 pub mod tui;

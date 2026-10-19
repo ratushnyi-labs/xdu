@@ -103,7 +103,7 @@ pub fn new_progress() -> SharedProgress {
     new_titled("Docker prune + shrink")
 }
 
-fn new_titled(title: &str) -> SharedProgress {
+pub fn new_titled(title: &str) -> SharedProgress {
     Arc::new(Mutex::new(Progress {
         title: title.to_string(),
         step: "starting".into(),
@@ -111,13 +111,13 @@ fn new_titled(title: &str) -> SharedProgress {
     }))
 }
 
-fn set_step(p: &SharedProgress, step: &str) {
+pub fn set_step(p: &SharedProgress, step: &str) {
     if let Ok(mut g) = p.lock() {
         g.step = step.to_string();
     }
 }
 
-fn finish(p: &SharedProgress, result: Result<String, String>) {
+pub fn finish(p: &SharedProgress, result: Result<String, String>) {
     if let Ok(mut g) = p.lock() {
         g.done = true;
         g.result = Some(result);
