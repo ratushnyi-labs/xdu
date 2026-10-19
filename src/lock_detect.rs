@@ -107,15 +107,64 @@ mod platform_impl {
         ) -> u32;
     }
 
+    /// Upper bound on files inspected when `path` is a directory. Restart
+    /// Manager only reports holders of the exact paths registered, so a
+    /// directory delete blocked by a file inside it needs the inner files.
+    const MAX_DIR_FILES: usize = 50_000;
+    /// Files registered per Restart Manager session.
+    const RM_BATCH: usize = 1000;
+
     pub fn holders(path: &Path) -> Vec<LockHolder> {
         let canonical: std::path::PathBuf =
             std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
-        let wide_path: Vec<u16> = OsStr::new(&canonical)
-            .encode_wide()
-            .chain(std::iter::once(0))
+        let mut files = vec![canonical.clone()];
+        if canonical.is_dir() {
+            collect_files(&canonical, &mut files);
+        }
+        let mut out: Vec<LockHolder> = Vec::new();
+        for chunk in files.chunks(RM_BATCH) {
+            for h in rm_holders(chunk) {
+                if !out.iter().any(|o| o.pid == h.pid) {
+                    out.push(h);
+                }
+            }
+        }
+        out
+    }
+
+    /// Iteratively collect regular files under `root` (symlinks not followed),
+    /// stopping at [`MAX_DIR_FILES`].
+    fn collect_files(root: &Path, out: &mut Vec<std::path::PathBuf>) {
+        let mut stack = vec![root.to_path_buf()];
+        while let Some(dir) = stack.pop() {
+            let Ok(rd) = std::fs::read_dir(&dir) else {
+                continue;
+            };
+            for e in rd.flatten() {
+                let Ok(ft) = e.file_type() else { continue };
+                if ft.is_dir() {
+                    stack.push(e.path());
+                } else if ft.is_file() {
+                    out.push(e.path());
+                    if out.len() >= MAX_DIR_FILES {
+                        return;
+                    }
+                }
+            }
+        }
+    }
+
+    fn rm_holders(paths: &[std::path::PathBuf]) -> Vec<LockHolder> {
+        let wide_paths: Vec<Vec<u16>> = paths
+            .iter()
+            .map(|p| {
+                OsStr::new(p)
+                    .encode_wide()
+                    .chain(std::iter::once(0))
+                    .collect()
+            })
             .collect();
-        let file_ptr: *const u16 = wide_path.as_ptr();
-        let files: [*const u16; 1] = [file_ptr];
+        let files: Vec<*const u16> = wide_paths.iter().map(|w| w.as_ptr()).collect();
 
         let mut session: u32 = 0;
         // Session key buffer — Restart Manager fills with a session GUID string.
@@ -140,12 +189,12 @@ mod platform_impl {
         }
         let _guard = SessionGuard(session);
 
-        // SAFETY: registering one file path; pointer arrays are valid for
+        // SAFETY: registering `files.len()` paths; pointer arrays are valid for
         // the duration of the call; counts match the array sizes.
         let rc = unsafe {
             RmRegisterResources(
                 session,
-                1,
+                files.len() as u32,
                 files.as_ptr(),
                 0,
                 std::ptr::null(),

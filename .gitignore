@@ -8,3 +8,7 @@ dist/
 .build/
 .dev-data/
 .dev-temp/
+
+# Optional extra root CAs for Docker builds (corporate TLS inspection); never commit
+.certs/*
+!.certs/.gitkeep

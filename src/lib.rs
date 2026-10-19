@@ -4,6 +4,7 @@
 //! TUI, and export. The binary in `src/main.rs` wires them together.
 
 pub mod disk_space;
+pub mod docker_shrink;
 pub mod drives_win;
 pub mod export;
 pub mod format;

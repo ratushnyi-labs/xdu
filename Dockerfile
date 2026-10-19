@@ -22,6 +22,21 @@ RUN apt-get update \
         musl-tools \
     && rm -rf /var/lib/apt/lists/*
 
+# Optional: trust extra root CAs (e.g. a corporate TLS-inspection proxy such as
+# Zscaler, which otherwise makes rustup/cargo/curl fail with "UnknownIssuer").
+# Put PEM-encoded *.crt files in .certs/ (git-ignored). With none present this
+# is a no-op and TLS verification uses the stock Debian trust store only.
+COPY .certs/ /tmp/extra-certs/
+RUN set -eu; n=0; \
+    for f in /tmp/extra-certs/*.crt; do \
+        [ -e "$f" ] || continue; \
+        cp "$f" "/usr/local/share/ca-certificates/$(basename "$f")"; \
+        n=$((n + 1)); \
+    done; \
+    if [ "$n" -gt 0 ]; then update-ca-certificates; fi; \
+    rm -rf /tmp/extra-certs
+ENV SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
+
 RUN rustup target add \
         x86_64-unknown-linux-musl \
         aarch64-unknown-linux-musl \

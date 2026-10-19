@@ -5,7 +5,9 @@ Contributions are welcome. This document describes how to contribute effectively
 ## Development Setup
 
 1. Install [Docker](https://docs.docker.com/get-docker/) — all builds and tests run in
-   containers per the project's host-isolation rule.
+   containers per the project's host-isolation rule. Behind a TLS-inspecting corporate
+   proxy (e.g. Zscaler), builds fail with `UnknownIssuer`: copy its root CA as a PEM
+   `*.crt` file into `.certs/` (git-ignored) and the Docker build will trust it.
 2. (Optional) Install Rust via [rustup](https://rustup.rs/) for editor integration.
    The container provides a pinned toolchain; the host install is purely a convenience.
 3. Clone the repository:

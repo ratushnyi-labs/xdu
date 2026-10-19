@@ -207,6 +207,45 @@ impl Tree {
         }
     }
 
+    /// Remove `id` (and its subtree) from the tree without rescanning: unlink
+    /// it from its parent's child list and subtract its totals from every
+    /// ancestor. The node's `parent` is cleared so a still-running scanner
+    /// cannot bubble further additions from the orphaned subtree into the
+    /// live ancestors. Returns `false` for the root or an unknown id.
+    pub fn detach(&mut self, id: NodeId) -> bool {
+        let Some(node) = self.nodes.get(id.index()) else {
+            return false;
+        };
+        let Some(parent) = node.parent else {
+            return false;
+        };
+        let (size, alloc, entries, next) = (node.size, node.alloc, node.entries, node.next_sibling);
+        if self.nodes[parent.index()].first_child == Some(id) {
+            self.nodes[parent.index()].first_child = next;
+        } else {
+            let mut cur = self.nodes[parent.index()].first_child;
+            while let Some(c) = cur {
+                if self.nodes[c.index()].next_sibling == Some(id) {
+                    self.nodes[c.index()].next_sibling = next;
+                    break;
+                }
+                cur = self.nodes[c.index()].next_sibling;
+            }
+        }
+        let mut p = Some(parent);
+        while let Some(pid) = p {
+            let n = &mut self.nodes[pid.index()];
+            n.size = n.size.saturating_sub(size);
+            n.alloc = n.alloc.saturating_sub(alloc);
+            n.entries = n.entries.saturating_sub(entries).max(1);
+            p = n.parent;
+        }
+        let n = &mut self.nodes[id.index()];
+        n.parent = None;
+        n.next_sibling = None;
+        true
+    }
+
     pub fn children(&self, parent: NodeId) -> ChildrenIter<'_> {
         ChildrenIter {
             tree: self,
@@ -513,6 +552,36 @@ mod tests {
         assert!(t.get(b).unwrap().error);
         assert!(t.get(a).unwrap().error);
         assert!(t.get(root).unwrap().error);
+    }
+
+    #[test]
+    fn detach_unlinks_node_and_updates_ancestor_totals() {
+        let mut t = Tree::new(NodeKind::Dir, "/");
+        let root = t.root();
+        let a = t.add_child(root, NodeKind::Dir, "a", 0, 0).unwrap();
+        let f1 = t.add_child(a, NodeKind::File, "f1", 100, 4096).unwrap();
+        t.add_child(a, NodeKind::File, "f2", 200, 4096).unwrap();
+        let b = t.add_child(root, NodeKind::File, "b", 50, 4096).unwrap();
+        t.aggregate();
+        assert!(t.detach(f1));
+        assert_eq!(names(&t, a), vec!["f2"]);
+        assert_eq!(t.get(a).unwrap().size, 200);
+        assert_eq!(t.get(a).unwrap().entries, 2);
+        assert_eq!(t.get(root).unwrap().size, 250);
+        assert_eq!(t.get(root).unwrap().entries, 4);
+        assert!(t.detach(a));
+        assert_eq!(names(&t, root), vec!["b"]);
+        assert_eq!(t.get(root).unwrap().size, 50);
+        assert_eq!(t.get(root).unwrap().entries, 2);
+        assert!(t.get(b).is_some());
+    }
+
+    #[test]
+    fn detach_root_or_unknown_is_rejected() {
+        let mut t = Tree::new(NodeKind::Dir, "/");
+        let root = t.root();
+        assert!(!t.detach(root));
+        assert!(!t.detach(NodeId(99)));
     }
 
     #[test]

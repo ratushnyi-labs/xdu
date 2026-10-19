@@ -1,4 +1,7 @@
-//! Terminal UI: runtime, tree-view widget, header / footer / help / errors
+//! Terminal UI: runtime, tree-view wid    let (title, step) = job
+        .lock()
+        .map(|g| (g.title.clone(), g.step.clone()))
+        .unwrap_or_default();et, header / footer / help / errors
 //! overlays, and rescan flow. Combines TASK-001-H/I/J/K leaves into one
 //! module to keep cross-references compact.
 //!
@@ -8,6 +11,7 @@
 //! finalized render an animated spinner.
 
 use crate::disk_space;
+use crate::docker_shrink::{self, SharedProgress};
 use crate::export;
 use crate::format::{bar, format_size, format_ymd, SizeMode};
 use crate::lock_detect::{self, LockHolder};
@@ -26,6 +30,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 use ratatui::Frame;
 use ratatui::Terminal;
+use std::collections::HashSet;
 use std::io::{self, stdout, Stdout};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -62,7 +67,20 @@ pub struct App {
     /// instead of `remove_file`/`remove_dir_all` (TASK-007-J). Off by default;
     /// enabled via `--trash` on the command line.
     trash_mode: bool,
+    /// Running Docker prune + VHDX shrink job (`z`). While `Some`, the UI
+    /// shows a busy overlay and ignores keys other than Ctrl-C.
+    shrink_job: Option<SharedProgress>,
+    /// Entries marked with Space for a batch delete (`d`). Cleared on rescan.
+    marks: HashSet<NodeId>,
     quit: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ConfirmAction {
+    Delete,
+    DeleteMarked,
+    Shrink,
+    Prune,
 }
 
 #[derive(Debug, Clone)]
@@ -70,6 +88,8 @@ pub struct ConfirmPrompt {
     target: NodeId,
     message: String,
     yes_focused: bool,
+    /// What `Yes` does.
+    action: ConfirmAction,
 }
 
 #[derive(Debug, Clone)]
@@ -123,6 +143,8 @@ impl App {
             lock_prompt: None,
             force_prompt: None,
             trash_mode,
+            shrink_job: None,
+            marks: HashSet::new(),
             quit: false,
         };
         s.sort_current();
@@ -240,6 +262,7 @@ impl App {
         self.root_path = path;
         let new_root = self.lock().tree.root();
         self.current = new_root;
+        self.marks.clear();
         self.selection = 0;
         self.back_stack.clear();
         self.sort_current();
@@ -333,7 +356,304 @@ impl App {
             target,
             message,
             yes_focused: false,
+            action: ConfirmAction::Delete,
         });
+    }
+
+    /// Selected non-`..` child of the current directory, with its absolute path.
+    fn selected_entry(&self) -> Option<(NodeId, PathBuf)> {
+        let offset = self.dotdot_offset();
+        if self.selection < offset {
+            return None;
+        }
+        let target = {
+            let g = self.lock();
+            let kids: Vec<NodeId> = g.tree.children(self.current).collect();
+            kids.get(self.selection - offset).copied()
+        }?;
+        let path = self.absolute_path_for(target)?;
+        Some((target, path))
+    }
+
+    fn start_shrink_prompt(&mut self) {
+        if !docker_shrink::is_supported() {
+            self.status = Some("vhdx shrink is only available on Windows".into());
+            return;
+        }
+        let Some((target, path)) = self.selected_entry() else {
+            return;
+        };
+        if !docker_shrink::is_vhdx(&path) {
+            self.status =
+                Some("z: select a .vhdx file (e.g. Docker's docker_data.vhdx) to shrink".into());
+            return;
+        }
+        let message = if docker_shrink::is_docker_disk(&path) {
+            format!(
+                "Docker prune + shrink\n  {}\n\n\
+                 1. Prunes Docker (prune -a --volumes): DELETES stopped containers,\n\
+                 \x20  ALL unused images, build cache and ALL UNUSED VOLUMES\n\
+                 \x20  (volume data is lost).\n\
+                 2. Force-stops Docker Desktop and WSL: ALL containers stop.\n\
+                 3. Compacts the VHDX (Windows asks for admin / UAC).\n\
+                 4. Restarts Docker Desktop.",
+                path.display()
+            )
+        } else {
+            format!(
+                "Shrink virtual disk\n  {}\n\n\
+                 1. Shuts down WSL (wsl --shutdown) and Docker Desktop:\n\
+                 \x20  everything running in WSL / Docker stops.\n\
+                 2. Compacts the VHDX (Windows asks for admin / UAC).\n\
+                 3. Restarts Docker Desktop if it was running.",
+                path.display()
+            )
+        };
+        self.confirm_prompt = Some(ConfirmPrompt {
+            target,
+            message,
+            yes_focused: false,
+            action: ConfirmAction::Shrink,
+        });
+    }
+
+    fn start_prune_prompt(&mut self) {
+        if !docker_shrink::is_supported() {
+            self.status = Some("docker prune is only available on Windows".into());
+            return;
+        }
+        let message = [
+            "Docker prune",
+            "",
+            "Runs: docker container / image -a / builder -a / volume -a prune -f",
+            "DELETES stopped containers, ALL unused images, build cache and",
+            "ALL UNUSED VOLUMES (volume data is lost), then trims free blocks.",
+            "Docker keeps running. The .vhdx file does not shrink until you",
+            "compact it (select the .vhdx and press z).",
+        ]
+        .join("\n");
+        self.confirm_prompt = Some(ConfirmPrompt {
+            target: self.current,
+            message,
+            yes_focused: false,
+            action: ConfirmAction::Prune,
+        });
+    }
+
+    fn start_shrink(&mut self, target: NodeId) {
+        let Some(path) = self.absolute_path_for(target) else {
+            self.status = Some("shrink: cannot resolve path".into());
+            return;
+        };
+        if !docker_shrink::is_vhdx(&path) {
+            self.status = Some("shrink: not a .vhdx file".into());
+            return;
+        }
+        self.shrink_job = Some(docker_shrink::spawn(path));
+    }
+
+    /// Called every UI tick: collect the result of a finished shrink job.
+    fn poll_shrink(&mut self) {
+        let Some(job) = self.shrink_job.as_ref() else {
+            return;
+        };
+        let (title, result) = {
+            let g = job.lock().unwrap();
+            if !g.done {
+                return;
+            }
+            (g.title.clone(), g.result.clone())
+        };
+        self.shrink_job = None;
+        self.status = Some(match result {
+            Some(Ok(msg)) => format!("{title}: {msg}"),
+            Some(Err(e)) => format!("{title} failed: {e}"),
+            None => format!("{title} finished"),
+        });
+    }
+
+    fn confirm_accept(&mut self, target: NodeId, action: ConfirmAction) {
+        match action {
+            ConfirmAction::Delete => self.perform_delete(target),
+            ConfirmAction::DeleteMarked => self.perform_delete_marked(),
+            ConfirmAction::Shrink => self.start_shrink(target),
+            ConfirmAction::Prune => self.shrink_job = Some(docker_shrink::spawn_prune()),
+        }
+    }
+
+    fn delete_path(&self, path: &Path) -> io::Result<()> {
+        if self.trash_mode {
+            trash::move_to_trash(path).map(|_| ())
+        } else if path.is_dir() {
+            std::fs::remove_dir_all(path)
+        } else {
+            std::fs::remove_file(path)
+        }
+    }
+
+    /// Toggle the mark on the selected entry, then move the cursor down.
+    fn toggle_mark(&mut self) {
+        let offset = self.dotdot_offset();
+        if self.selection < offset {
+            return;
+        }
+        let id = {
+            let g = self.lock();
+            g.tree.children(self.current).nth(self.selection - offset)
+        };
+        let Some(id) = id else { return };
+        if !self.marks.remove(&id) {
+            self.marks.insert(id);
+        }
+        self.move_selection(1);
+    }
+
+    /// Mark every entry of the current directory, or clear them all if every
+    /// entry is already marked.
+    fn toggle_mark_all(&mut self) {
+        let kids: Vec<NodeId> = self.lock().tree.children(self.current).collect();
+        if kids.iter().all(|k| self.marks.contains(k)) {
+            for k in &kids {
+                self.marks.remove(k);
+            }
+        } else {
+            self.marks.extend(kids);
+        }
+    }
+
+    /// Marked nodes minus any whose ancestor is also marked (deleting the
+    /// ancestor already removes them), in a stable order.
+    fn marked_roots(&self) -> Vec<NodeId> {
+        let g = self.lock();
+        let mut out: Vec<NodeId> = self
+            .marks
+            .iter()
+            .copied()
+            .filter(|&id| {
+                let mut p = g.tree.get(id).and_then(|n| n.parent);
+                while let Some(pid) = p {
+                    if self.marks.contains(&pid) {
+                        return false;
+                    }
+                    p = g.tree.get(pid).and_then(|n| n.parent);
+                }
+                true
+            })
+            .collect();
+        out.sort_by_key(|id| id.index());
+        out
+    }
+
+    fn start_delete_marked_prompt(&mut self) {
+        let roots = self.marked_roots();
+        if roots.is_empty() {
+            return;
+        }
+        let mut paths: Vec<PathBuf> = Vec::new();
+        let mut total: u64 = 0;
+        for &id in &roots {
+            let Some(path) = self.absolute_path_for(id) else {
+                continue;
+            };
+            if self.is_scan_root(&path) {
+                self.status = Some("cannot delete the scan root (unmark it first)".into());
+                return;
+            }
+            total = total.saturating_add(self.lock().tree.get(id).map_or(0, |n| n.size));
+            paths.push(path);
+        }
+        const SHOWN: usize = 8;
+        let mut list: Vec<String> = paths
+            .iter()
+            .take(SHOWN)
+            .map(|p| format!("  {}", p.display()))
+            .collect();
+        if paths.len() > SHOWN {
+            list.push(format!("  … and {} more", paths.len() - SHOWN));
+        }
+        let (verb, tail) = if self.trash_mode {
+            (
+                "Move to trash",
+                "Trashed items can be restored from the OS trash.",
+            )
+        } else {
+            ("Delete", "This cannot be undone.")
+        };
+        let message = format!(
+            "{verb} {} marked items ({}) ?\n{}\n{tail}",
+            paths.len(),
+            format_size(total, self.size_mode),
+            list.join("\n")
+        );
+        self.confirm_prompt = Some(ConfirmPrompt {
+            target: roots[0],
+            message,
+            yes_focused: false,
+            action: ConfirmAction::DeleteMarked,
+        });
+    }
+
+    /// Delete every marked entry. Failures are collected (and listed in the
+    /// `!` errors panel) instead of stopping the batch; failed entries stay
+    /// marked so they can be retried.
+    fn perform_delete_marked(&mut self) {
+        let roots = self.marked_roots();
+        let mut deleted = 0_usize;
+        let mut failures: Vec<(PathBuf, String)> = Vec::new();
+        for id in roots {
+            let Some(path) = self.absolute_path_for(id) else {
+                continue;
+            };
+            if self.is_scan_root(&path) {
+                failures.push((path, "refusing to remove the scan root".into()));
+                continue;
+            }
+            match self.delete_path(&path) {
+                Ok(()) if !path.exists() => {
+                    self.lock().tree.detach(id);
+                    self.marks.remove(&id);
+                    deleted += 1;
+                }
+                Ok(()) => failures.push((path, "still on disk after delete".into())),
+                Err(e) => {
+                    let raw = e.raw_os_error().unwrap_or(0);
+                    let msg = if matches!(raw, 5 | 32 | 33 | 145) {
+                        let holders = lock_detect::holders(&path);
+                        if holders.is_empty() {
+                            format!("in use ({e})")
+                        } else {
+                            let names: Vec<String> = holders
+                                .iter()
+                                .map(|h| format!("{} (pid {})", h.name, h.pid))
+                                .collect();
+                            format!("in use by {}", names.join(", "))
+                        }
+                    } else {
+                        e.to_string()
+                    };
+                    failures.push((path, msg));
+                }
+            }
+        }
+        let last = self.total_rows().saturating_sub(1);
+        self.selection = self.selection.min(last);
+        let verb = if self.trash_mode {
+            "moved to trash"
+        } else {
+            "deleted"
+        };
+        self.status = Some(match failures.first() {
+            None => format!("{verb} {deleted} item(s)"),
+            Some((p, m)) => format!(
+                "{verb} {deleted}, {} failed (see !): {}: {m}",
+                failures.len(),
+                p.display()
+            ),
+        });
+        let mut g = self.lock();
+        for (path, message) in failures {
+            g.errors.push(ScanError { path, message });
+        }
     }
 
     fn perform_delete(&mut self, node_id: NodeId) {
@@ -346,13 +666,7 @@ impl App {
             return;
         }
         let canonical = std::fs::canonicalize(&path).unwrap_or_else(|_| path.clone());
-        let result = if self.trash_mode {
-            trash::move_to_trash(&path)
-        } else if path.is_dir() {
-            std::fs::remove_dir_all(&path)
-        } else {
-            std::fs::remove_file(&path)
-        };
+        let result = self.delete_path(&path);
         match result {
             Ok(_) => {
                 if path.exists() {
@@ -370,16 +684,27 @@ impl App {
                     } else {
                         format!("deleted {}", canonical.display())
                     };
-                    let root = self.root_path.clone();
-                    let _ = self.spawn_scan(root);
-                    self.status = Some(m);
+                    // Update the in-memory tree instead of rescanning the disk.
+                    self.marks.remove(&node_id);
+                    let detached = self.lock().tree.detach(node_id);
+                    if detached {
+                        let last = self.total_rows().saturating_sub(1);
+                        self.selection = self.selection.min(last);
+                        self.status = Some(m);
+                    } else {
+                        let root = self.root_path.clone();
+                        let _ = self.spawn_scan(root);
+                        self.status = Some(m);
+                    }
                 }
             }
             Err(e) => {
                 // BUG-004: when the OS reports the file is in use, try to
                 // identify the holding processes and offer a Retry modal.
                 let raw = e.raw_os_error().unwrap_or(0);
-                let is_in_use = matches!(raw, 5 | 32 | 33);
+                // 145 = ERROR_DIR_NOT_EMPTY, surfaced when a file inside a
+                // directory could not be removed.
+                let is_in_use = matches!(raw, 5 | 32 | 33 | 145);
                 if is_in_use && self.try_open_lock_prompt(node_id, canonical.clone()) {
                     return;
                 }
@@ -421,6 +746,11 @@ impl App {
             self.quit = true;
             return;
         }
+        // A prune + shrink job is stopping/compacting Docker: ignore input so
+        // it cannot be interrupted half-way by an accidental `q`.
+        if self.shrink_job.is_some() {
+            return;
+        }
         if self.handle_prompt_key(key) {
             return;
         }
@@ -448,7 +778,18 @@ impl App {
             KeyCode::Char('u') => self.toggle_size_mode(),
             KeyCode::Char('r') => self.rescan(),
             KeyCode::Char('e') => self.export(),
-            KeyCode::Char('d') => self.start_delete_prompt(),
+            KeyCode::Char('d') => {
+                if self.marks.is_empty() {
+                    self.start_delete_prompt();
+                } else {
+                    self.start_delete_marked_prompt();
+                }
+            }
+            KeyCode::Char(' ') => self.toggle_mark(),
+            KeyCode::Char('a') => self.toggle_mark_all(),
+            KeyCode::Esc => self.marks.clear(),
+            KeyCode::Char('z') => self.start_shrink_prompt(),
+            KeyCode::Char('P') => self.start_prune_prompt(),
             _ => {}
         }
     }
@@ -470,9 +811,9 @@ impl App {
                 self.confirm_prompt = None;
             }
             KeyCode::Char('y') | KeyCode::Char('Y') => {
-                let target = prompt.target;
+                let (target, action) = (prompt.target, prompt.action);
                 self.confirm_prompt = None;
-                self.perform_delete(target);
+                self.confirm_accept(target, action);
             }
             KeyCode::Tab
             | KeyCode::Left
@@ -483,10 +824,10 @@ impl App {
             }
             KeyCode::Enter => {
                 let yes = prompt.yes_focused;
-                let target = prompt.target;
+                let (target, action) = (prompt.target, prompt.action);
                 self.confirm_prompt = None;
                 if yes {
-                    self.perform_delete(target);
+                    self.confirm_accept(target, action);
                 }
             }
             _ => {}
@@ -598,8 +939,8 @@ impl App {
 fn format_delete_error(path: &Path, e: &io::Error) -> String {
     let raw = e.raw_os_error().unwrap_or(0);
     match raw {
-        5 | 32 | 33 => format!(
-            "delete failed: {} is in use. Close the holding app (e.g. with Sysinternals Process Explorer or Resource Monitor) and try again.",
+        5 | 32 | 33 | 145 => format!(
+            "delete failed: {} is in use, but the holding app could not be identified (it may be a system/elevated process, or a shell/terminal whose working directory is inside). Try Sysinternals Process Explorer (Find > Handle) or Resource Monitor, then retry.",
             path.display()
         ),
         _ => format!("delete failed: {}: {}", path.display(), e),
@@ -677,6 +1018,7 @@ pub fn app_from_tree_for_test(root_path: PathBuf, tree: crate::tree::Tree) -> Ap
 
 fn run_loop(term: &mut Terminal<CrosstermBackend<Stdout>>, mut app: App) -> io::Result<()> {
     while !app.quit {
+        app.poll_shrink();
         term.draw(|f| render(f, &app))?;
         if event::poll(Duration::from_millis(100))? {
             if let Event::Key(ke) = event::read()? {
@@ -736,6 +1078,26 @@ fn render(f: &mut Frame, app: &App) {
     if let Some(prompt) = app.force_prompt.as_ref() {
         render_force_prompt(f, area, prompt);
     }
+    if let Some(job) = app.shrink_job.as_ref() {
+        render_shrink_busy(f, area, job);
+    }
+}
+
+fn render_shrink_busy(f: &mut Frame, area: Rect, job: &SharedProgress) {
+    let step = job.lock().map(|g| g.step.clone()).unwrap_or_default();
+    let lines = vec![
+        Line::from(format!("{} {step}…", spinner_char())),
+        Line::from(""),
+        Line::from("This can take several minutes."),
+        Line::from("Input is disabled until it finishes."),
+    ];
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(format!(" {title} "));
+    let h = (lines.len() as u16 + 2).min(area.height);
+    let r = centered_rect(area, 70, h);
+    f.render_widget(Clear, r);
+    f.render_widget(Paragraph::new(lines).block(block), r);
 }
 
 fn render_lock_prompt(f: &mut Frame, area: Rect, prompt: &LockPrompt) {
@@ -857,9 +1219,12 @@ fn render_confirm(f: &mut Frame, area: Rect, prompt: &ConfirmPrompt) {
     lines.push(Line::from(
         "Tab/Left/Right: toggle    Enter: activate    y: yes    n / Esc / q: cancel",
     ));
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .title(" Confirm delete ");
+    let title = match prompt.action {
+        ConfirmAction::Shrink => " Confirm Docker prune + shrink ",
+        ConfirmAction::Prune => " Confirm Docker prune ",
+        ConfirmAction::Delete | ConfirmAction::DeleteMarked => " Confirm delete ",
+    };
+    let block = Block::default().borders(Borders::ALL).title(title);
     let h = (lines.len() as u16 + 2).min(area.height);
     let r = centered_rect(area, 84, h);
     f.render_widget(Clear, r);
@@ -939,6 +1304,7 @@ fn render_body(f: &mut Frame, area: Rect, app: &App, state: &ScanResult) {
                 app.size_mode,
                 spinner,
                 absolute_i == app.selection,
+                app.marks.contains(&id),
             )
         };
         lines.push(line);
@@ -966,8 +1332,12 @@ fn render_entry_row(
     size_mode: SizeMode,
     spinner: char,
     selected: bool,
+    marked: bool,
 ) -> Line<'static> {
-    let name = display_name(&node.name, node.kind);
+    let mut name = display_name(&node.name, node.kind);
+    if marked {
+        name.insert_str(0, "* ");
+    }
     let name_padded = pad_or_truncate(&name, name_w);
     let (bar_str, size_str) = if node.finalized {
         let frac = (node.size as f64) / (dir_total as f64);
@@ -989,7 +1359,10 @@ fn render_entry_row(
     } else {
         0.0
     };
-    let style = row_style(frac, node.kind, node.error, selected);
+    let mut style = row_style(frac, node.kind, node.error, selected);
+    if marked {
+        style = style.add_modifier(Modifier::BOLD).fg(Color::Yellow);
+    }
     Line::from(Span::styled(s, style))
 }
 
@@ -1030,6 +1403,24 @@ fn pad_or_truncate(s: &str, width: usize) -> String {
     out
 }
 
+/// `true` when shrinking is available here and the selected row is a `.vhdx`.
+/// Reads the already-locked `state` (the render path holds the mutex).
+fn selected_is_vhdx(app: &App, state: &ScanResult) -> bool {
+    if !docker_shrink::is_supported() {
+        return false;
+    }
+    let offset = app.dotdot_offset();
+    if app.selection < offset {
+        return false;
+    }
+    state
+        .tree
+        .children(app.current)
+        .nth(app.selection - offset)
+        .and_then(|id| state.tree.get(id))
+        .is_some_and(|n| n.kind == NodeKind::File && docker_shrink::is_vhdx(Path::new(&*n.name)))
+}
+
 fn render_footer(f: &mut Frame, area: Rect, app: &App, state: &ScanResult) {
     let left = if let Some(msg) = app.status.as_deref() {
         format!(" {msg}  (any key to dismiss) ")
@@ -1046,11 +1437,22 @@ fn render_footer(f: &mut Frame, area: Rect, app: &App, state: &ScanResult) {
         } else {
             "d:delete"
         };
-        format!(
-            " sort:{}  errors:{}  ?:help  s:sort  u:unit  r:rescan  e:export  {delete_hint}  !:errors  q:quit ",
-            sort_label(app.sort),
-            state.errors.len()
-        )
+        if app.marks.is_empty() && selected_is_vhdx(app, state) {
+            // A virtual disk is selected: surface the shrink action, which
+            // would otherwise be cut off the end of the default footer.
+            format!(" z:shrink this .vhdx (prune Docker + compact)  {delete_hint}  ?:help  q:quit ")
+        } else if app.marks.is_empty() {
+            format!(
+                " sort:{}  errors:{}  ?:help  s:sort  u:unit  r:rescan  e:export  {delete_hint}  !:errors  q:quit ",
+                sort_label(app.sort),
+                state.errors.len()
+            )
+        } else {
+            format!(
+                " marked:{}  Space:mark  a:all  Esc:clear  {delete_hint} marked  ?:help  q:quit ",
+                app.marks.len()
+            )
+        }
     };
     let mut right = disk_space::format_free(&app.root_path, app.size_mode);
     if app.trash_mode {
@@ -1098,6 +1500,9 @@ fn render_help(f: &mut Frame, area: Rect) {
         Line::from("  r               rescan from root (async)"),
         Line::from("  e               export current subtree to xdu-export.json"),
         Line::from("  d               delete the selected entry (with confirmation)"),
+        Line::from("  Space / a / Esc mark entry / mark all / clear; d deletes marked"),
+        Line::from("  z               shrink the selected .vhdx (+ Docker prune)"),
+        Line::from("  P               Docker prune only (no stop, no compact)"),
         Line::from("  !               show errors"),
         Line::from("  ? / F1          this help"),
         Line::from("  q / Ctrl-C      quit"),
@@ -1109,7 +1514,7 @@ fn render_help(f: &mut Frame, area: Rect) {
         Line::from("Press any key to dismiss."),
     ];
     let block = Block::default().borders(Borders::ALL).title(" Help ");
-    let r = centered_rect(area, 64, 24);
+    let r = centered_rect(area, 68, 27);
     f.render_widget(Clear, r);
     f.render_widget(Paragraph::new(lines).block(block), r);
 }
@@ -1498,6 +1903,166 @@ mod tests {
         app.handle_key(KeyCode::Enter, KeyModifiers::NONE);
         assert!(app.confirm_prompt.is_none());
         assert!(!target.exists(), "file must be deleted after Yes+Enter");
+
+        let _ = std::fs::remove_dir_all(&td_path);
+    }
+
+    fn app_with_files(label: &str, names: &[&str]) -> (App, PathBuf) {
+        let td_path = unique_temp(label);
+        std::fs::create_dir_all(&td_path).unwrap();
+        for (i, n) in names.iter().enumerate() {
+            std::fs::write(td_path.join(n), vec![0u8; 100 * (i + 1)]).unwrap();
+        }
+        let opts = ScanOpts::default();
+        let h = handle_from_sync(td_path.clone(), opts.clone());
+        let app = App::new(td_path.clone(), opts, h, SizeMode::Iec);
+        (app, td_path)
+    }
+
+    #[test]
+    fn space_marks_and_unmarks_and_advances_cursor() {
+        let (mut app, td) = app_with_files("mark-toggle", &["a.txt", "b.txt", "c.txt"]);
+        app.selection = app.dotdot_offset();
+        let start = app.selection;
+        app.handle_key(KeyCode::Char(' '), KeyModifiers::NONE);
+        assert_eq!(app.marks.len(), 1);
+        assert_eq!(app.selection, start + 1);
+        app.selection = start;
+        app.handle_key(KeyCode::Char(' '), KeyModifiers::NONE);
+        assert!(app.marks.is_empty(), "second Space unmarks");
+        app.handle_key(KeyCode::Char('a'), KeyModifiers::NONE);
+        assert_eq!(app.marks.len(), 3);
+        app.handle_key(KeyCode::Esc, KeyModifiers::NONE);
+        assert!(app.marks.is_empty());
+        let _ = std::fs::remove_dir_all(&td);
+    }
+
+    #[test]
+    fn d_with_marks_deletes_only_marked_files_after_confirm() {
+        let (mut app, td) = app_with_files("mark-del", &["a.txt", "b.txt", "c.txt"]);
+        let state_before = std::sync::Arc::as_ptr(&app.state);
+        app.selection = app.dotdot_offset();
+        app.handle_key(KeyCode::Char(' '), KeyModifiers::NONE); // marks row 1, moves to row 2
+        app.handle_key(KeyCode::Char(' '), KeyModifiers::NONE); // marks row 2
+        assert_eq!(app.marks.len(), 2);
+        app.handle_key(KeyCode::Char('d'), KeyModifiers::NONE);
+        let prompt = app.confirm_prompt.as_ref().expect("batch prompt opens");
+        assert!(
+            prompt.message.contains("2 marked items"),
+            "{}",
+            prompt.message
+        );
+        assert_eq!(prompt.action, ConfirmAction::DeleteMarked);
+        // Nothing deleted yet; default focus is No.
+        assert_eq!(std::fs::read_dir(&td).unwrap().count(), 3);
+        app.handle_key(KeyCode::Char('y'), KeyModifiers::NONE);
+
+        assert_eq!(std::fs::read_dir(&td).unwrap().count(), 1);
+        assert_eq!(app.children_count(), 1);
+        assert!(app.marks.is_empty());
+        assert_eq!(
+            state_before,
+            std::sync::Arc::as_ptr(&app.state),
+            "no rescan"
+        );
+        assert!(app.status.as_deref().unwrap_or("").contains("2 item"));
+        let _ = std::fs::remove_dir_all(&td);
+    }
+
+    #[test]
+    fn d_with_marks_cancel_deletes_nothing() {
+        let (mut app, td) = app_with_files("mark-cancel", &["a.txt", "b.txt"]);
+        app.selection = app.dotdot_offset();
+        app.handle_key(KeyCode::Char('a'), KeyModifiers::NONE);
+        app.handle_key(KeyCode::Char('d'), KeyModifiers::NONE);
+        app.handle_key(KeyCode::Char('n'), KeyModifiers::NONE);
+        assert_eq!(std::fs::read_dir(&td).unwrap().count(), 2);
+        assert_eq!(app.marks.len(), 2, "marks are kept after cancel");
+        let _ = std::fs::remove_dir_all(&td);
+    }
+
+    #[test]
+    fn marked_roots_skips_children_of_marked_directories() {
+        let td = unique_temp("mark-nested");
+        std::fs::create_dir_all(td.join("dir")).unwrap();
+        std::fs::write(td.join("dir").join("inner.txt"), b"x").unwrap();
+        let opts = ScanOpts::default();
+        let h = handle_from_sync(td.clone(), opts.clone());
+        let mut app = App::new(td.clone(), opts, h, SizeMode::Iec);
+        let (dir, inner) = {
+            let g = app.lock();
+            let dir = g.tree.children(g.tree.root()).next().unwrap();
+            let inner = g.tree.children(dir).next().unwrap();
+            (dir, inner)
+        };
+        app.marks.insert(dir);
+        app.marks.insert(inner);
+        assert_eq!(app.marked_roots(), vec![dir]);
+        let _ = std::fs::remove_dir_all(&td);
+    }
+
+    #[test]
+    fn shift_p_opens_prune_prompt_defaulting_to_no_or_reports_unsupported() {
+        let (mut app, td) = app_with_files("prune-key", &["a.txt"]);
+        app.handle_key(KeyCode::Char('P'), KeyModifiers::NONE);
+        if docker_shrink::is_supported() {
+            let p = app.confirm_prompt.as_ref().expect("prune prompt opens");
+            assert_eq!(p.action, ConfirmAction::Prune);
+            assert!(!p.yes_focused, "default focus must be No");
+            assert!(p.message.contains("UNUSED VOLUMES"));
+        } else {
+            assert!(app.confirm_prompt.is_none());
+            assert!(app.status.as_deref().unwrap_or("").contains("Windows"));
+        }
+        assert!(app.shrink_job.is_none(), "nothing runs before confirmation");
+        let _ = std::fs::remove_dir_all(&td);
+    }
+
+    #[test]
+    fn z_on_non_vhdx_does_not_open_shrink_prompt() {
+        let td_path = unique_temp("shrink-nonvhdx");
+        std::fs::create_dir_all(&td_path).unwrap();
+        std::fs::write(td_path.join("a.txt"), b"x").unwrap();
+
+        let opts = ScanOpts::default();
+        let h = handle_from_sync(td_path.clone(), opts.clone());
+        let mut app = App::new(td_path.clone(), opts, h, SizeMode::Iec);
+        app.selection = app.dotdot_offset();
+        app.handle_key(KeyCode::Char('z'), KeyModifiers::NONE);
+        assert!(app.confirm_prompt.is_none());
+        assert!(app.shrink_job.is_none());
+        assert!(app.status.is_some());
+
+        let _ = std::fs::remove_dir_all(&td_path);
+    }
+
+    #[test]
+    fn delete_updates_tree_in_place_without_rescan() {
+        let td_path = unique_temp("del-nores");
+        std::fs::create_dir_all(&td_path).unwrap();
+        std::fs::write(td_path.join("a.txt"), vec![0u8; 1000]).unwrap();
+        std::fs::write(td_path.join("b.txt"), vec![0u8; 10]).unwrap();
+
+        let opts = ScanOpts::default();
+        let h = handle_from_sync(td_path.clone(), opts.clone());
+        let mut app = App::new(td_path.clone(), opts, h, SizeMode::Iec);
+        let state_before = std::sync::Arc::as_ptr(&app.state);
+        let root = app.lock().tree.root();
+        let total_before = app.lock().tree.get(root).unwrap().size;
+        app.selection = app.dotdot_offset(); // largest first: a.txt
+        app.start_delete_prompt();
+        app.handle_key(KeyCode::Tab, KeyModifiers::NONE);
+        app.handle_key(KeyCode::Enter, KeyModifiers::NONE);
+
+        assert!(!td_path.join("a.txt").exists());
+        assert_eq!(
+            state_before,
+            std::sync::Arc::as_ptr(&app.state),
+            "delete must not start a new scan"
+        );
+        assert_eq!(app.children_count(), 1);
+        let total_after = app.lock().tree.get(root).unwrap().size;
+        assert_eq!(total_before - total_after, 1000);
 
         let _ = std::fs::remove_dir_all(&td_path);
     }

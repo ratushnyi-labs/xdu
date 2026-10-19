@@ -178,6 +178,9 @@ fn print_help() {
     println!("  Right/l Enter enter     u    toggle units   q/^C   quit");
     println!("  Left/h Bksp   up        r    rescan         e      export");
     println!("                          d    delete (with [No]-default prompt)");
+    println!("                          Space mark, a mark all, Esc clear, then d deletes marked");
+    println!("                          z    shrink selected .vhdx, prunes Docker (Windows)");
+    println!("                          P    Docker prune only (Windows)");
     println!("                          !    show errors");
     println!();
     println!("xdu is read-only by default; deletion is exposed only behind 'd'");
